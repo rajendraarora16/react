@@ -33,6 +33,31 @@ describe('SimpleEventPlugin', function() {
   }
 
   beforeEach(function() {
+    // TODO pull this into helper method, reduce repetition.
+    // mock the browser APIs which are used in react-scheduler:
+    // - requestAnimationFrame should pass the DOMHighResTimeStamp argument
+    // - calling 'window.postMessage' should actually fire postmessage handlers
+    global.requestAnimationFrame = function(cb) {
+      return setTimeout(() => {
+        cb(Date.now());
+      });
+    };
+    const originalAddEventListener = global.addEventListener;
+    let postMessageCallback;
+    global.addEventListener = function(eventName, callback, useCapture) {
+      if (eventName === 'message') {
+        postMessageCallback = callback;
+      } else {
+        originalAddEventListener(eventName, callback, useCapture);
+      }
+    };
+    global.postMessage = function(messageKey, targetOrigin) {
+      const postMessageEvent = {source: window, data: messageKey};
+      if (postMessageCallback) {
+        postMessageCallback(postMessageEvent);
+      }
+    };
+    jest.resetModules();
     React = require('react');
     ReactDOM = require('react-dom');
     ReactTestUtils = require('react-dom/test-utils');
@@ -223,13 +248,12 @@ describe('SimpleEventPlugin', function() {
       ReactFeatureFlags = require('shared/ReactFeatureFlags');
       ReactFeatureFlags.enableAsyncSubtreeAPI = true;
       ReactFeatureFlags.debugRenderPhaseSideEffectsForStrictMode = false;
-      ReactFeatureFlags.enableCreateRoot = true;
       ReactDOM = require('react-dom');
     });
 
     it('flushes pending interactive work before extracting event handler', () => {
       const container = document.createElement('div');
-      const root = ReactDOM.createRoot(container);
+      const root = ReactDOM.unstable_createRoot(container);
       document.body.appendChild(container);
 
       let ops = [];
@@ -309,7 +333,7 @@ describe('SimpleEventPlugin', function() {
 
     it('end result of many interactive updates is deterministic', () => {
       const container = document.createElement('div');
-      const root = ReactDOM.createRoot(container);
+      const root = ReactDOM.unstable_createRoot(container);
       document.body.appendChild(container);
 
       let button;

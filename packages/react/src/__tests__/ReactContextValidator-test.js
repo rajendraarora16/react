@@ -119,43 +119,6 @@ describe('ReactContextValidator', () => {
     expect(actualComponentWillUpdate).toEqual({foo: 'def'});
   });
 
-  it('should not pass previous context to lifecycles', () => {
-    let actualComponentDidUpdate;
-
-    class Parent extends React.Component {
-      getChildContext() {
-        return {
-          foo: this.props.foo,
-        };
-      }
-
-      render() {
-        return <Component />;
-      }
-    }
-    Parent.childContextTypes = {
-      foo: PropTypes.string.isRequired,
-    };
-
-    class Component extends React.Component {
-      componentDidUpdate(...args) {
-        actualComponentDidUpdate = args;
-      }
-
-      render() {
-        return <div />;
-      }
-    }
-    Component.contextTypes = {
-      foo: PropTypes.string,
-    };
-
-    const container = document.createElement('div');
-    ReactDOM.render(<Parent foo="abc" />, container);
-    ReactDOM.render(<Parent foo="def" />, container);
-    expect(actualComponentDidUpdate).toHaveLength(2);
-  });
-
   it('should check context types', () => {
     class Component extends React.Component {
       render() {
@@ -260,6 +223,28 @@ describe('ReactContextValidator', () => {
     );
 
     ReactTestUtils.renderIntoDocument(<Component testContext={{foo: 'foo'}} />);
+  });
+
+  it('warns of incorrect prop types on context provider', () => {
+    const TestContext = React.createContext();
+
+    TestContext.Provider.propTypes = {
+      value: PropTypes.string.isRequired,
+    };
+
+    ReactTestUtils.renderIntoDocument(<TestContext.Provider value="val" />);
+
+    class Component extends React.Component {
+      render() {
+        return <TestContext.Provider />;
+      }
+    }
+
+    expect(() => ReactTestUtils.renderIntoDocument(<Component />)).toWarnDev(
+      'Warning: Failed prop type: The prop `value` is marked as required in ' +
+        '`Context.Provider`, but its value is `undefined`.\n' +
+        '    in Component (at **)',
+    );
   });
 
   // TODO (bvaughn) Remove this test and the associated behavior in the future.

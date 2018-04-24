@@ -16,6 +16,7 @@ import type {NewContext} from './ReactFiberNewContext';
 import type {HydrationContext} from './ReactFiberHydrationContext';
 import type {FiberRoot} from './ReactFiberRoot';
 import type {ExpirationTime} from './ReactFiberExpirationTime';
+import checkPropTypes from 'prop-types/checkPropTypes';
 
 import {
   IndeterminateComponent,
@@ -35,10 +36,12 @@ import {
   ContextConsumer,
 } from 'shared/ReactTypeOfWork';
 import {
+  NoEffect,
   PerformedWork,
   Placement,
   ContentReset,
   Ref,
+  DidCapture,
 } from 'shared/ReactTypeOfSideEffect';
 import {ReactCurrentOwner} from 'shared/ReactGlobalSharedState';
 import {
@@ -52,16 +55,20 @@ import warning from 'fbjs/lib/warning';
 import ReactDebugCurrentFiber from './ReactDebugCurrentFiber';
 import {cancelWorkTimer} from './ReactDebugFiberPerf';
 
-import ReactFiberClassComponent from './ReactFiberClassComponent';
+import ReactFiberClassComponent, {
+  applyDerivedStateFromProps,
+} from './ReactFiberClassComponent';
 import {
   mountChildFibers,
   reconcileChildFibers,
   cloneChildFibers,
 } from './ReactChildFiber';
-import {processUpdateQueue} from './ReactFiberUpdateQueue';
+import {processUpdateQueue} from './ReactUpdateQueue';
 import {NoWork, Never} from './ReactFiberExpirationTime';
 import {AsyncMode, StrictMode} from './ReactTypeOfMode';
 import MAX_SIGNED_31_BIT_INT from './maxSigned31BitInt';
+
+const {getCurrentFiberStackAddendum} = ReactDebugCurrentFiber;
 
 let didWarnAboutBadClass;
 let didWarnAboutGetDerivedStateOnFunctionalComponent;
@@ -105,7 +112,6 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
 
   const {
     adoptClassInstance,
-    callGetDerivedStateFromProps,
     constructClassInstance,
     mountClassInstance,
     resumeMountClassInstance,
@@ -260,7 +266,11 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     if (current === null) {
       if (workInProgress.stateNode === null) {
         // In the initial pass we might need to construct the instance.
-        constructClassInstance(workInProgress, workInProgress.pendingProps);
+        constructClassInstance(
+          workInProgress,
+          workInProgress.pendingProps,
+          renderExpirationTime,
+        );
         mountClassInstance(workInProgress, renderExpirationTime);
 
         shouldUpdate = true;
@@ -278,22 +288,11 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
         renderExpirationTime,
       );
     }
-
-    // We processed the update queue inside updateClassInstance. It may have
-    // included some errors that were dispatched during the commit phase.
-    // TODO: Refactor class components so this is less awkward.
-    let didCaptureError = false;
-    const updateQueue = workInProgress.updateQueue;
-    if (updateQueue !== null && updateQueue.capturedValues !== null) {
-      shouldUpdate = true;
-      didCaptureError = true;
-    }
     return finishClassComponent(
       current,
       workInProgress,
       shouldUpdate,
       hasContext,
-      didCaptureError,
       renderExpirationTime,
     );
   }
@@ -303,11 +302,13 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     workInProgress: Fiber,
     shouldUpdate: boolean,
     hasContext: boolean,
-    didCaptureError: boolean,
     renderExpirationTime: ExpirationTime,
   ) {
     // Refs should update even if shouldComponentUpdate returns false
     markRef(current, workInProgress);
+
+    const didCaptureError =
+      (workInProgress.effectTag & DidCapture) !== NoEffect;
 
     if (!shouldUpdate && !didCaptureError) {
       // Context providers should defer to sCU for rendering
@@ -348,13 +349,6 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
         }
         ReactDebugCurrentFiber.setCurrentPhase(null);
       } else {
-        if (
-          debugRenderPhaseSideEffects ||
-          (debugRenderPhaseSideEffectsForStrictMode &&
-            workInProgress.mode & StrictMode)
-        ) {
-          instance.render();
-        }
         nextChildren = instance.render();
       }
     }
@@ -413,29 +407,24 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     pushHostRootContext(workInProgress);
     let updateQueue = workInProgress.updateQueue;
     if (updateQueue !== null) {
+      const nextProps = workInProgress.pendingProps;
       const prevState = workInProgress.memoizedState;
-      const state = processUpdateQueue(
-        current,
+      const prevChildren = prevState !== null ? prevState.children : null;
+      processUpdateQueue(
         workInProgress,
         updateQueue,
-        null,
+        nextProps,
         null,
         renderExpirationTime,
       );
-      memoizeState(workInProgress, state);
-      updateQueue = workInProgress.updateQueue;
+      const nextState = workInProgress.memoizedState;
+      const nextChildren = nextState.children;
 
-      let element;
-      if (updateQueue !== null && updateQueue.capturedValues !== null) {
-        // There's an uncaught error. Unmount the whole root.
-        element = null;
-      } else if (prevState === state) {
+      if (nextChildren === prevChildren) {
         // If the state is the same as before, that's a bailout because we had
         // no work that expires at this time.
         resetHydrationState();
         return bailoutOnAlreadyFinishedWork(current, workInProgress);
-      } else {
-        element = state.element;
       }
       const root: FiberRoot = workInProgress.stateNode;
       if (
@@ -460,16 +449,15 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
         workInProgress.child = mountChildFibers(
           workInProgress,
           null,
-          element,
+          nextChildren,
           renderExpirationTime,
         );
       } else {
         // Otherwise reset hydration state in case we aborted and resumed another
         // root.
         resetHydrationState();
-        reconcileChildren(current, workInProgress, element);
+        reconcileChildren(current, workInProgress, nextChildren);
       }
-      memoizeState(workInProgress, state);
       return workInProgress.child;
     }
     resetHydrationState();
@@ -607,21 +595,13 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
       workInProgress.memoizedState =
         value.state !== null && value.state !== undefined ? value.state : null;
 
-      if (typeof Component.getDerivedStateFromProps === 'function') {
-        const partialState = callGetDerivedStateFromProps(
+      const getDerivedStateFromProps = Component.getDerivedStateFromProps;
+      if (typeof getDerivedStateFromProps === 'function') {
+        applyDerivedStateFromProps(
           workInProgress,
-          value,
+          getDerivedStateFromProps,
           props,
-          workInProgress.memoizedState,
         );
-
-        if (partialState !== null && partialState !== undefined) {
-          workInProgress.memoizedState = Object.assign(
-            {},
-            workInProgress.memoizedState,
-            partialState,
-          );
-        }
       }
 
       // Push context providers early to prevent context stack mismatches.
@@ -635,7 +615,6 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
         workInProgress,
         true,
         hasContext,
-        false,
         renderExpirationTime,
       );
     } else {
@@ -868,7 +847,7 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     renderExpirationTime,
   ) {
     const providerType: ReactProviderType<any> = workInProgress.type;
-    const context: ReactContext<any> = providerType.context;
+    const context: ReactContext<any> = providerType._context;
 
     const newProps = workInProgress.pendingProps;
     const oldProps = workInProgress.memoizedProps;
@@ -884,6 +863,20 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
 
     const newValue = newProps.value;
     workInProgress.memoizedProps = newProps;
+
+    if (__DEV__) {
+      const providerPropTypes = workInProgress.type.propTypes;
+
+      if (providerPropTypes) {
+        checkPropTypes(
+          providerPropTypes,
+          newProps,
+          'prop',
+          'Context.Provider',
+          getCurrentFiberStackAddendum,
+        );
+      }
+    }
 
     let changedBits: number;
     if (oldProps === null) {
@@ -994,10 +987,14 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
         changedBits,
         renderExpirationTime,
       );
-    } else if (oldProps !== null && oldProps.children === newProps.children) {
-      // No change. Bailout early if children are the same.
+    } else if (oldProps === newProps) {
+      // Skip over a memoized parent with a bitmask bailout even
+      // if we began working on it because of a deeper matching child.
       return bailoutOnAlreadyFinishedWork(current, workInProgress);
     }
+    // There is no bailout on `children` equality because we expect people
+    // to often pass a bound method as a child, but it may reference
+    // `this.state` or `this.props` (and thus needs to re-render on `setState`).
 
     const render = newProps.children;
 

@@ -14,6 +14,7 @@ import type {HydrationContext} from './ReactFiberHydrationContext';
 import type {ExpirationTime} from './ReactFiberExpirationTime';
 
 import ReactErrorUtils from 'shared/ReactErrorUtils';
+import {getStackAddendumByWorkInProgressFiber} from 'shared/ReactFiberComponentTreeHook';
 import {ReactCurrentOwner} from 'shared/ReactGlobalSharedState';
 import ReactStrictModeWarnings from './ReactStrictModeWarnings';
 import {
@@ -21,6 +22,7 @@ import {
   PerformedWork,
   Placement,
   Update,
+  Snapshot,
   PlacementAndUpdate,
   Deletion,
   ContentReset,
@@ -29,7 +31,6 @@ import {
   Ref,
   Incomplete,
   HostEffectMask,
-  ErrLog,
 } from 'shared/ReactTypeOfSideEffect';
 import {
   HostRoot,
@@ -67,12 +68,14 @@ import {
   stopWorkLoopTimer,
   startCommitTimer,
   stopCommitTimer,
+  startCommitSnapshotEffectsTimer,
+  stopCommitSnapshotEffectsTimer,
   startCommitHostEffectsTimer,
   stopCommitHostEffectsTimer,
   startCommitLifeCyclesTimer,
   stopCommitLifeCyclesTimer,
 } from './ReactDebugFiberPerf';
-import {createWorkInProgress} from './ReactFiber';
+import {createWorkInProgress, assignFiberPropertiesInDEV} from './ReactFiber';
 import {onCommitRoot} from './ReactFiberDevToolsHook';
 import {
   NoWork,
@@ -85,10 +88,7 @@ import {
 import {AsyncMode} from './ReactTypeOfMode';
 import ReactFiberLegacyContext from './ReactFiberContext';
 import ReactFiberNewContext from './ReactFiberNewContext';
-import {
-  getUpdateExpirationTime,
-  insertUpdateIntoFiber,
-} from './ReactFiberUpdateQueue';
+import {enqueueUpdate, resetCurrentlyProcessingQueue} from './ReactUpdateQueue';
 import {createCapturedValue} from './ReactCapturedValue';
 import ReactFiberStack from './ReactFiberStack';
 
@@ -109,17 +109,19 @@ if (__DEV__) {
   const didWarnStateUpdateForUnmountedComponent = {};
 
   warnAboutUpdateOnUnmounted = function(fiber: Fiber) {
+    // We show the whole stack but dedupe on the top component's name because
+    // the problematic code almost always lies inside that component.
     const componentName = getComponentName(fiber) || 'ReactClass';
     if (didWarnStateUpdateForUnmountedComponent[componentName]) {
       return;
     }
     warning(
       false,
-      'Can only update a mounted or mounting ' +
-        'component. This usually means you called setState, replaceState, ' +
-        'or forceUpdate on an unmounted component. This is a no-op.\n\nPlease ' +
-        'check the code for the %s component.',
-      componentName,
+      "Can't call setState (or forceUpdate) on an unmounted component. This " +
+        'is a no-op, but it indicates a memory leak in your application. To ' +
+        'fix, cancel all subscriptions and asynchronous tasks in the ' +
+        'componentWillUnmount method.%s',
+      getStackAddendumByWorkInProgressFiber(fiber),
     );
     didWarnStateUpdateForUnmountedComponent[componentName] = true;
   };
@@ -189,20 +191,24 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     throwException,
     unwindWork,
     unwindInterruptedWork,
+    createRootErrorUpdate,
+    createClassErrorUpdate,
   } = ReactFiberUnwindWork(
     hostContext,
     legacyContext,
     newContext,
     scheduleWork,
+    markLegacyErrorBoundaryAsFailed,
     isAlreadyFailedLegacyErrorBoundary,
+    onUncaughtError,
   );
   const {
+    commitBeforeMutationLifeCycles,
     commitResetTextContent,
     commitPlacement,
     commitDeletion,
     commitWork,
     commitLifeCycles,
-    commitErrorLogging,
     commitAttachRef,
     commitDetachRef,
   } = ReactFiberCommitWork(
@@ -256,11 +262,23 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
 
   let stashedWorkInProgressProperties;
   let replayUnitOfWork;
+  let isReplayingFailedUnitOfWork;
+  let originalReplayError;
+  let rethrowOriginalError;
   if (__DEV__ && replayFailedUnitOfWorkWithInvokeGuardedCallback) {
     stashedWorkInProgressProperties = null;
-    replayUnitOfWork = (failedUnitOfWork: Fiber, isAsync: boolean) => {
-      // Retore the original state of the work-in-progress
-      Object.assign(failedUnitOfWork, stashedWorkInProgressProperties);
+    isReplayingFailedUnitOfWork = false;
+    originalReplayError = null;
+    replayUnitOfWork = (
+      failedUnitOfWork: Fiber,
+      error: mixed,
+      isAsync: boolean,
+    ) => {
+      // Restore the original state of the work-in-progress
+      assignFiberPropertiesInDEV(
+        failedUnitOfWork,
+        stashedWorkInProgressProperties,
+      );
       switch (failedUnitOfWork.tag) {
         case HostRoot:
           popHostContainer(failedUnitOfWork);
@@ -280,13 +298,21 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
           break;
       }
       // Replay the begin phase.
+      isReplayingFailedUnitOfWork = true;
+      originalReplayError = error;
       invokeGuardedCallback(null, workLoop, null, isAsync);
+      isReplayingFailedUnitOfWork = false;
+      originalReplayError = null;
       if (hasCaughtError()) {
         clearCaughtError();
       } else {
-        // This should be unreachable because the render phase is
-        // idempotent
+        // If the begin phase did not fail the second time, set this pointer
+        // back to the original value.
+        nextUnitOfWork = failedUnitOfWork;
       }
+    };
+    rethrowOriginalError = () => {
+      throw originalReplayError;
     };
   }
 
@@ -319,6 +345,7 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
       recordEffect();
 
       const effectTag = nextEffect.effectTag;
+
       if (effectTag & ContentReset) {
         commitResetTextContent(nextEffect);
       }
@@ -376,6 +403,22 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     }
   }
 
+  function commitBeforeMutationLifecycles() {
+    while (nextEffect !== null) {
+      const effectTag = nextEffect.effectTag;
+
+      if (effectTag & Snapshot) {
+        recordEffect();
+        const current = nextEffect.alternate;
+        commitBeforeMutationLifeCycles(current, nextEffect);
+      }
+
+      // Don't cleanup effects yet;
+      // This will be done by commitAllLifeCycles()
+      nextEffect = nextEffect.nextEffect;
+    }
+  }
+
   function commitAllLifeCycles(
     finishedRoot: FiberRoot,
     currentTime: ExpirationTime,
@@ -401,10 +444,6 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
           currentTime,
           committedExpirationTime,
         );
-      }
-
-      if (effectTag & ErrLog) {
-        commitErrorLogging(nextEffect, onUncaughtError);
       }
 
       if (effectTag & Ref) {
@@ -482,6 +521,41 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     }
 
     prepareForCommit(root.containerInfo);
+
+    // Invoke instances of getSnapshotBeforeUpdate before mutation.
+    nextEffect = firstEffect;
+    startCommitSnapshotEffectsTimer();
+    while (nextEffect !== null) {
+      let didError = false;
+      let error;
+      if (__DEV__) {
+        invokeGuardedCallback(null, commitBeforeMutationLifecycles, null);
+        if (hasCaughtError()) {
+          didError = true;
+          error = clearCaughtError();
+        }
+      } else {
+        try {
+          commitBeforeMutationLifecycles();
+        } catch (e) {
+          didError = true;
+          error = e;
+        }
+      }
+      if (didError) {
+        invariant(
+          nextEffect !== null,
+          'Should have next effect. This error is likely caused by a bug ' +
+            'in React. Please file an issue.',
+        );
+        onCommitPhaseError(nextEffect, error);
+        // Clean-up
+        if (nextEffect !== null) {
+          nextEffect = nextEffect.nextEffect;
+        }
+      }
+    }
+    stopCommitSnapshotEffectsTimer();
 
     // Commit all the side-effects within a tree. We'll do this in two passes.
     // The first pass performs all the host insertions, updates, deletions and
@@ -602,7 +676,16 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     }
 
     // Check for pending updates.
-    let newExpirationTime = getUpdateExpirationTime(workInProgress);
+    let newExpirationTime = NoWork;
+    switch (workInProgress.tag) {
+      case HostRoot:
+      case ClassComponent: {
+        const updateQueue = workInProgress.updateQueue;
+        if (updateQueue !== null) {
+          newExpirationTime = updateQueue.expirationTime;
+        }
+      }
+    }
 
     // TODO: Calls need to visit stateNode
 
@@ -787,12 +870,21 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     }
 
     if (__DEV__ && replayFailedUnitOfWorkWithInvokeGuardedCallback) {
-      stashedWorkInProgressProperties = Object.assign({}, workInProgress);
+      stashedWorkInProgressProperties = assignFiberPropertiesInDEV(
+        stashedWorkInProgressProperties,
+        workInProgress,
+      );
     }
     let next = beginWork(current, workInProgress, nextRenderExpirationTime);
-
     if (__DEV__) {
       ReactDebugCurrentFiber.resetCurrentFiber();
+      if (isReplayingFailedUnitOfWork) {
+        // Currently replaying a failed unit of work. This should be unreachable,
+        // because the render phase is meant to be idempotent, and it should
+        // have thrown again. Since it didn't, rethrow the original error, so
+        // React's internal stack is not misaligned.
+        rethrowOriginalError();
+      }
     }
     if (__DEV__ && ReactFiberInstrumentation.debugTool) {
       ReactFiberInstrumentation.debugTool.onBeginWork(workInProgress);
@@ -868,32 +960,49 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
           break;
         }
 
+        if (__DEV__) {
+          // Reset global debug state
+          // We assume this is defined in DEV
+          (resetCurrentlyProcessingQueue: any)();
+        }
+
         if (__DEV__ && replayFailedUnitOfWorkWithInvokeGuardedCallback) {
           const failedUnitOfWork = nextUnitOfWork;
-          replayUnitOfWork(failedUnitOfWork, isAsync);
+          replayUnitOfWork(failedUnitOfWork, thrownValue, isAsync);
         }
 
         const sourceFiber: Fiber = nextUnitOfWork;
         let returnFiber = sourceFiber.return;
         if (returnFiber === null) {
-          // This is a fatal error.
+          // This is the root. The root could capture its own errors. However,
+          // we don't know if it errors before or after we pushed the host
+          // context. This information is needed to avoid a stack mismatch.
+          // Because we're not sure, treat this as a fatal error. We could track
+          // which phase it fails in, but doesn't seem worth it. At least
+          // for now.
           didFatal = true;
           onUncaughtError(thrownValue);
           break;
         }
-        throwException(returnFiber, sourceFiber, thrownValue);
+        throwException(
+          returnFiber,
+          sourceFiber,
+          thrownValue,
+          nextRenderExpirationTime,
+        );
         nextUnitOfWork = completeUnitOfWork(sourceFiber);
       }
       break;
     } while (true);
 
     // We're done performing work. Time to clean up.
-    stopWorkLoopTimer(interruptedBy);
-    interruptedBy = null;
+    let didCompleteRoot = false;
     isWorking = false;
 
     // Yield back to main thread.
     if (didFatal) {
+      stopWorkLoopTimer(interruptedBy, didCompleteRoot);
+      interruptedBy = null;
       // There was a fatal error.
       if (__DEV__) {
         stack.resetStackAfterFatalErrorInDev();
@@ -902,12 +1011,17 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     } else if (nextUnitOfWork === null) {
       // We reached the root.
       if (isRootReadyForCommit) {
+        didCompleteRoot = true;
+        stopWorkLoopTimer(interruptedBy, didCompleteRoot);
+        interruptedBy = null;
         // The root successfully completed. It's ready for commit.
         root.pendingCommitExpirationTime = expirationTime;
         const finishedWork = root.current.alternate;
         return finishedWork;
       } else {
         // The root did not complete.
+        stopWorkLoopTimer(interruptedBy, didCompleteRoot);
+        interruptedBy = null;
         invariant(
           false,
           'Expired work should have completed. This error is likely caused ' +
@@ -915,26 +1029,12 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
         );
       }
     } else {
+      stopWorkLoopTimer(interruptedBy, didCompleteRoot);
+      interruptedBy = null;
       // There's more work to do, but we ran out of time. Yield back to
       // the renderer.
       return null;
     }
-  }
-
-  function scheduleCapture(sourceFiber, boundaryFiber, value, expirationTime) {
-    // TODO: We only support dispatching errors.
-    const capturedValue = createCapturedValue(value, sourceFiber);
-    const update = {
-      expirationTime,
-      partialState: null,
-      callback: null,
-      isReplace: false,
-      isForced: false,
-      capturedValue,
-      next: null,
-    };
-    insertUpdateIntoFiber(boundaryFiber, update);
-    scheduleWork(boundaryFiber, expirationTime);
   }
 
   function dispatch(
@@ -947,8 +1047,6 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
       'dispatch: Cannot dispatch during the render phase.',
     );
 
-    // TODO: Handle arrays
-
     let fiber = sourceFiber.return;
     while (fiber !== null) {
       switch (fiber.tag) {
@@ -960,14 +1058,28 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
             (typeof instance.componentDidCatch === 'function' &&
               !isAlreadyFailedLegacyErrorBoundary(instance))
           ) {
-            scheduleCapture(sourceFiber, fiber, value, expirationTime);
+            const errorInfo = createCapturedValue(value, sourceFiber);
+            const update = createClassErrorUpdate(
+              fiber,
+              errorInfo,
+              expirationTime,
+            );
+            enqueueUpdate(fiber, update, expirationTime);
+            scheduleWork(fiber, expirationTime);
             return;
           }
           break;
-        // TODO: Handle async boundaries
-        case HostRoot:
-          scheduleCapture(sourceFiber, fiber, value, expirationTime);
+        case HostRoot: {
+          const errorInfo = createCapturedValue(value, sourceFiber);
+          const update = createRootErrorUpdate(
+            fiber,
+            errorInfo,
+            expirationTime,
+          );
+          enqueueUpdate(fiber, update, expirationTime);
+          scheduleWork(fiber, expirationTime);
           return;
+        }
       }
       fiber = fiber.return;
     }
@@ -975,7 +1087,15 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     if (sourceFiber.tag === HostRoot) {
       // Error was thrown at the root. There is no parent, so the root
       // itself should capture it.
-      scheduleCapture(sourceFiber, sourceFiber, value, expirationTime);
+      const rootFiber = sourceFiber;
+      const errorInfo = createCapturedValue(value, rootFiber);
+      const update = createRootErrorUpdate(
+        rootFiber,
+        errorInfo,
+        expirationTime,
+      );
+      enqueueUpdate(rootFiber, update, expirationTime);
+      scheduleWork(rootFiber, expirationTime);
     }
   }
 
@@ -993,8 +1113,22 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
   }
 
   function computeInteractiveExpiration(currentTime: ExpirationTime) {
-    // Should complete within ~500ms. 600ms max.
-    const expirationMs = 500;
+    let expirationMs;
+    // We intentionally set a higher expiration time for interactive updates in
+    // dev than in production.
+    // If the main thread is being blocked so long that you hit the expiration,
+    // it's a problem that could be solved with better scheduling.
+    // People will be more likely to notice this and fix it with the long
+    // expiration time in development.
+    // In production we opt for better UX at the risk of masking scheduling
+    // problems, by expiring fast.
+    if (__DEV__) {
+      // Should complete within ~500ms. 600ms max.
+      expirationMs = 500;
+    } else {
+      // In production things should be more responsive, 150ms max.
+      expirationMs = 150;
+    }
     const bucketSizeMs = 100;
     return computeExpirationBucket(currentTime, expirationMs, bucketSizeMs);
   }
@@ -1108,7 +1242,15 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
             interruptedBy = fiber;
             resetStack();
           }
-          if (nextRoot !== root || !isWorking) {
+          if (
+            // If we're in the render phase, we don't need to schedule this root
+            // for an update, because we'll do it before we exit...
+            !isWorking ||
+            isCommitting ||
+            // ...unless this is a different root than the one we're rendering.
+            nextRoot !== root
+          ) {
+            // Add this root to the root schedule.
             requestWork(root, expirationTime);
           }
           if (nestedUpdateCount > NESTED_UPDATE_LIMIT) {
@@ -1376,7 +1518,8 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
 
     if (enableUserTimingAPI && deadline !== null) {
       const didExpire = nextFlushedExpirationTime < recalculateCurrentTime();
-      stopRequestCallbackTimer(didExpire);
+      const timeout = expirationTimeToMs(nextFlushedExpirationTime);
+      stopRequestCallbackTimer(didExpire, timeout);
     }
 
     if (isAsync) {
@@ -1436,7 +1579,11 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     // Perform work on root as if the given expiration time is the current time.
     // This has the effect of synchronously flushing all work up to and
     // including the given time.
+    nextFlushedRoot = root;
+    nextFlushedExpirationTime = expirationTime;
     performWorkOnRoot(root, expirationTime, false);
+    // Flush any sync work that was scheduled by lifecycles
+    performSyncWork();
     finishRendering();
   }
 

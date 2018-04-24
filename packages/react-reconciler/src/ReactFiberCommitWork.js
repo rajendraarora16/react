@@ -27,16 +27,21 @@ import {
   CallComponent,
 } from 'shared/ReactTypeOfWork';
 import ReactErrorUtils from 'shared/ReactErrorUtils';
-import {Placement, Update, ContentReset} from 'shared/ReactTypeOfSideEffect';
+import {
+  Placement,
+  Update,
+  ContentReset,
+  Snapshot,
+} from 'shared/ReactTypeOfSideEffect';
+import {commitUpdateQueue} from './ReactUpdateQueue';
 import invariant from 'fbjs/lib/invariant';
 import warning from 'fbjs/lib/warning';
 
-import {commitCallbacks} from './ReactFiberUpdateQueue';
 import {onCommitUnmount} from './ReactFiberDevToolsHook';
 import {startPhaseTimer, stopPhaseTimer} from './ReactDebugFiberPerf';
-import {logCapturedError} from './ReactFiberErrorLogger';
 import getComponentName from 'shared/getComponentName';
 import {getStackAddendumByWorkInProgressFiber} from 'shared/ReactFiberComponentTreeHook';
+import {logCapturedError} from './ReactFiberErrorLogger';
 
 const {
   invokeGuardedCallback,
@@ -44,7 +49,12 @@ const {
   clearCaughtError,
 } = ReactErrorUtils;
 
-function logError(boundary: Fiber, errorInfo: CapturedValue<mixed>) {
+let didWarnAboutUndefinedSnapshotBeforeUpdate: Set<mixed> | null = null;
+if (__DEV__) {
+  didWarnAboutUndefinedSnapshotBeforeUpdate = new Set();
+}
+
+export function logError(boundary: Fiber, errorInfo: CapturedValue<mixed>) {
   const source = errorInfo.source;
   let stack = errorInfo.stack;
   if (stack === null) {
@@ -53,21 +63,19 @@ function logError(boundary: Fiber, errorInfo: CapturedValue<mixed>) {
 
   const capturedError: CapturedError = {
     componentName: source !== null ? getComponentName(source) : null,
-    error: errorInfo.value,
-    errorBoundary: boundary,
     componentStack: stack !== null ? stack : '',
+    error: errorInfo.value,
+    errorBoundary: null,
     errorBoundaryName: null,
     errorBoundaryFound: false,
     willRetry: false,
   };
 
-  if (boundary !== null) {
+  if (boundary !== null && boundary.tag === ClassComponent) {
+    capturedError.errorBoundary = boundary.stateNode;
     capturedError.errorBoundaryName = getComponentName(boundary);
-    capturedError.errorBoundaryFound = capturedError.willRetry =
-      boundary.tag === ClassComponent;
-  } else {
-    capturedError.errorBoundaryName = null;
-    capturedError.errorBoundaryFound = capturedError.willRetry = false;
+    capturedError.errorBoundaryFound = true;
+    capturedError.willRetry = true;
   }
 
   try {
@@ -153,6 +161,63 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
     }
   }
 
+  function commitBeforeMutationLifeCycles(
+    current: Fiber | null,
+    finishedWork: Fiber,
+  ): void {
+    switch (finishedWork.tag) {
+      case ClassComponent: {
+        if (finishedWork.effectTag & Snapshot) {
+          if (current !== null) {
+            const prevProps = current.memoizedProps;
+            const prevState = current.memoizedState;
+            startPhaseTimer(finishedWork, 'getSnapshotBeforeUpdate');
+            const instance = finishedWork.stateNode;
+            instance.props = finishedWork.memoizedProps;
+            instance.state = finishedWork.memoizedState;
+            const snapshot = instance.getSnapshotBeforeUpdate(
+              prevProps,
+              prevState,
+            );
+            if (__DEV__) {
+              const didWarnSet = ((didWarnAboutUndefinedSnapshotBeforeUpdate: any): Set<
+                mixed,
+              >);
+              if (
+                snapshot === undefined &&
+                !didWarnSet.has(finishedWork.type)
+              ) {
+                didWarnSet.add(finishedWork.type);
+                warning(
+                  false,
+                  '%s.getSnapshotBeforeUpdate(): A snapshot value (or null) ' +
+                    'must be returned. You have returned undefined.',
+                  getComponentName(finishedWork),
+                );
+              }
+            }
+            instance.__reactInternalSnapshotBeforeUpdate = snapshot;
+            stopPhaseTimer();
+          }
+        }
+        return;
+      }
+      case HostRoot:
+      case HostComponent:
+      case HostText:
+      case HostPortal:
+        // Nothing to do for these component types
+        return;
+      default: {
+        invariant(
+          false,
+          'This unit of work tag should not have side-effects. This error is ' +
+            'likely caused by a bug in React. Please file an issue.',
+        );
+      }
+    }
+  }
+
   function commitLifeCycles(
     finishedRoot: FiberRoot,
     current: Fiber | null,
@@ -176,13 +241,24 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
             startPhaseTimer(finishedWork, 'componentDidUpdate');
             instance.props = finishedWork.memoizedProps;
             instance.state = finishedWork.memoizedState;
-            instance.componentDidUpdate(prevProps, prevState);
+            instance.componentDidUpdate(
+              prevProps,
+              prevState,
+              instance.__reactInternalSnapshotBeforeUpdate,
+            );
             stopPhaseTimer();
           }
         }
         const updateQueue = finishedWork.updateQueue;
         if (updateQueue !== null) {
-          commitCallbacks(updateQueue, instance);
+          instance.props = finishedWork.memoizedProps;
+          instance.state = finishedWork.memoizedState;
+          commitUpdateQueue(
+            finishedWork,
+            updateQueue,
+            instance,
+            committedExpirationTime,
+          );
         }
         return;
       }
@@ -200,7 +276,12 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
                 break;
             }
           }
-          commitCallbacks(updateQueue, instance);
+          commitUpdateQueue(
+            finishedWork,
+            updateQueue,
+            instance,
+            committedExpirationTime,
+          );
         }
         return;
       }
@@ -234,73 +315,6 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
             'likely caused by a bug in React. Please file an issue.',
         );
       }
-    }
-  }
-
-  function commitErrorLogging(
-    finishedWork: Fiber,
-    onUncaughtError: (error: Error) => void,
-  ) {
-    switch (finishedWork.tag) {
-      case ClassComponent:
-        {
-          const ctor = finishedWork.type;
-          const instance = finishedWork.stateNode;
-          const updateQueue = finishedWork.updateQueue;
-          invariant(
-            updateQueue !== null && updateQueue.capturedValues !== null,
-            'An error logging effect should not have been scheduled if no errors ' +
-              'were captured. This error is likely caused by a bug in React. ' +
-              'Please file an issue.',
-          );
-          const capturedErrors = updateQueue.capturedValues;
-          updateQueue.capturedValues = null;
-
-          if (typeof ctor.getDerivedStateFromCatch !== 'function') {
-            // To preserve the preexisting retry behavior of error boundaries,
-            // we keep track of which ones already failed during this batch.
-            // This gets reset before we yield back to the browser.
-            // TODO: Warn in strict mode if getDerivedStateFromCatch is
-            // not defined.
-            markLegacyErrorBoundaryAsFailed(instance);
-          }
-
-          instance.props = finishedWork.memoizedProps;
-          instance.state = finishedWork.memoizedState;
-          for (let i = 0; i < capturedErrors.length; i++) {
-            const errorInfo = capturedErrors[i];
-            const error = errorInfo.value;
-            const stack = errorInfo.stack;
-            logError(finishedWork, errorInfo);
-            instance.componentDidCatch(error, {
-              componentStack: stack !== null ? stack : '',
-            });
-          }
-        }
-        break;
-      case HostRoot: {
-        const updateQueue = finishedWork.updateQueue;
-        invariant(
-          updateQueue !== null && updateQueue.capturedValues !== null,
-          'An error logging effect should not have been scheduled if no errors ' +
-            'were captured. This error is likely caused by a bug in React. ' +
-            'Please file an issue.',
-        );
-        const capturedErrors = updateQueue.capturedValues;
-        updateQueue.capturedValues = null;
-        for (let i = 0; i < capturedErrors.length; i++) {
-          const errorInfo = capturedErrors[i];
-          logError(finishedWork, errorInfo);
-          onUncaughtError(errorInfo.value);
-        }
-        break;
-      }
-      default:
-        invariant(
-          false,
-          'This unit of work tag cannot capture errors.  This error is ' +
-            'likely caused by a bug in React. Please file an issue.',
-        );
     }
   }
 
@@ -494,7 +508,7 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
           commitContainer(finishedWork);
         },
         commitLifeCycles,
-        commitErrorLogging,
+        commitBeforeMutationLifeCycles,
         commitAttachRef,
         commitDetachRef,
       };
@@ -816,12 +830,12 @@ export default function<T, P, I, TI, HI, PI, C, CC, CX, PL>(
 
   if (enableMutatingReconciler) {
     return {
+      commitBeforeMutationLifeCycles,
       commitResetTextContent,
       commitPlacement,
       commitDeletion,
       commitWork,
       commitLifeCycles,
-      commitErrorLogging,
       commitAttachRef,
       commitDetachRef,
     };

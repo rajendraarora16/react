@@ -46,6 +46,14 @@ if (__DEV__) {
   const didWarnAboutDeprecatedLifecycles = new Set();
   const didWarnAboutUnsafeLifecycles = new Set();
 
+  const setToSortedString = set => {
+    const array = [];
+    set.forEach(value => {
+      array.push(value);
+    });
+    return array.sort().join(', ');
+  };
+
   ReactStrictModeWarnings.discardPendingWarnings = () => {
     pendingComponentWillMountWarnings = [];
     pendingComponentWillReceivePropsWarnings = [];
@@ -69,9 +77,7 @@ if (__DEV__) {
 
             const formatted = lifecycle.replace('UNSAFE_', '');
             const suggestion = LIFECYCLE_SUGGESTIONS[lifecycle];
-            const sortedComponentNames = Array.from(componentNames)
-              .sort()
-              .join(', ');
+            const sortedComponentNames = setToSortedString(componentNames);
 
             lifecyclesWarningMesages.push(
               `${formatted}: Please update the following components to use ` +
@@ -123,9 +129,7 @@ if (__DEV__) {
         didWarnAboutDeprecatedLifecycles.add(fiber.type);
       });
 
-      const sortedNames = Array.from(uniqueNames)
-        .sort()
-        .join(', ');
+      const sortedNames = setToSortedString(uniqueNames);
 
       lowPriorityWarning(
         false,
@@ -148,9 +152,7 @@ if (__DEV__) {
         didWarnAboutDeprecatedLifecycles.add(fiber.type);
       });
 
-      const sortedNames = Array.from(uniqueNames)
-        .sort()
-        .join(', ');
+      const sortedNames = setToSortedString(uniqueNames);
 
       lowPriorityWarning(
         false,
@@ -172,9 +174,7 @@ if (__DEV__) {
         didWarnAboutDeprecatedLifecycles.add(fiber.type);
       });
 
-      const sortedNames = Array.from(uniqueNames)
-        .sort()
-        .join(', ');
+      const sortedNames = setToSortedString(uniqueNames);
 
       lowPriorityWarning(
         false,
@@ -213,7 +213,10 @@ if (__DEV__) {
     ) {
       pendingComponentWillReceivePropsWarnings.push(fiber);
     }
-    if (typeof instance.componentWillUpdate === 'function') {
+    if (
+      typeof instance.componentWillUpdate === 'function' &&
+      instance.componentWillUpdate.__suppressDeprecationWarning !== true
+    ) {
       pendingComponentWillUpdateWarnings.push(fiber);
     }
   };
@@ -233,16 +236,6 @@ if (__DEV__) {
       return;
     }
 
-    // Don't warn about react-lifecycles-compat polyfilled components.
-    // Note that it is sufficient to check for the presence of a
-    // single lifecycle, componentWillMount, with the polyfill flag.
-    if (
-      typeof instance.componentWillMount === 'function' &&
-      instance.componentWillMount.__suppressDeprecationWarning === true
-    ) {
-      return;
-    }
-
     let warningsForRoot;
     if (!pendingUnsafeLifecycleWarnings.has(strictRoot)) {
       warningsForRoot = {
@@ -258,19 +251,23 @@ if (__DEV__) {
 
     const unsafeLifecycles = [];
     if (
-      typeof instance.componentWillMount === 'function' ||
+      (typeof instance.componentWillMount === 'function' &&
+        instance.componentWillMount.__suppressDeprecationWarning !== true) ||
       typeof instance.UNSAFE_componentWillMount === 'function'
     ) {
       unsafeLifecycles.push('UNSAFE_componentWillMount');
     }
     if (
-      typeof instance.componentWillReceiveProps === 'function' ||
+      (typeof instance.componentWillReceiveProps === 'function' &&
+        instance.componentWillReceiveProps.__suppressDeprecationWarning !==
+          true) ||
       typeof instance.UNSAFE_componentWillReceiveProps === 'function'
     ) {
       unsafeLifecycles.push('UNSAFE_componentWillReceiveProps');
     }
     if (
-      typeof instance.componentWillUpdate === 'function' ||
+      (typeof instance.componentWillUpdate === 'function' &&
+        instance.componentWillUpdate.__suppressDeprecationWarning !== true) ||
       typeof instance.UNSAFE_componentWillUpdate === 'function'
     ) {
       unsafeLifecycles.push('UNSAFE_componentWillUpdate');

@@ -22,7 +22,7 @@ export const ContentReset = /*          */ 0b00000010000;
 export const Callback = /*              */ 0b00000100000;
 export const DidCapture = /*            */ 0b00001000000;
 export const Ref = /*                   */ 0b00010000000;
-export const ErrLog = /*                */ 0b00100000000;
+export const Snapshot = /*              */ 0b00100000000;
 
 // Union of all host effects
 export const HostEffectMask = /*        */ 0b00111111111;

@@ -17,56 +17,49 @@ let AsyncMode = React.unstable_AsyncMode;
 describe('ReactDOMRoot', () => {
   let container;
 
-  let scheduledCallback;
-  let flush;
-  let now;
-  let expire;
+  let advanceCurrentTime;
 
   beforeEach(() => {
     container = document.createElement('div');
-
-    // Override requestIdleCallback
-    scheduledCallback = null;
-    flush = function(units = Infinity) {
-      if (scheduledCallback !== null) {
-        let didStop = false;
-        while (scheduledCallback !== null && !didStop) {
-          const cb = scheduledCallback;
-          scheduledCallback = null;
-          cb({
-            timeRemaining() {
-              if (units > 0) {
-                return 999;
-              }
-              didStop = true;
-              return 0;
-            },
-          });
-          units--;
-        }
+    // TODO pull this into helper method, reduce repetition.
+    // mock the browser APIs which are used in react-scheduler:
+    // - requestAnimationFrame should pass the DOMHighResTimeStamp argument
+    // - calling 'window.postMessage' should actually fire postmessage handlers
+    // - must allow artificially changing time returned by Date.now
+    // Performance.now is not supported in the test environment
+    const originalDateNow = Date.now;
+    let advancedTime = null;
+    global.Date.now = function() {
+      if (advancedTime) {
+        return originalDateNow() + advancedTime;
+      }
+      return originalDateNow();
+    };
+    advanceCurrentTime = function(amount) {
+      advancedTime = amount;
+    };
+    global.requestAnimationFrame = function(cb) {
+      return setTimeout(() => {
+        cb(Date.now());
+      });
+    };
+    const originalAddEventListener = global.addEventListener;
+    let postMessageCallback;
+    global.addEventListener = function(eventName, callback, useCapture) {
+      if (eventName === 'message') {
+        postMessageCallback = callback;
+      } else {
+        originalAddEventListener(eventName, callback, useCapture);
       }
     };
-    global.performance = {
-      now() {
-        return now;
-      },
-    };
-    global.requestIdleCallback = function(cb) {
-      scheduledCallback = cb;
-    };
-
-    now = 0;
-    expire = function(ms) {
-      now += ms;
-    };
-    global.performance = {
-      now() {
-        return now;
-      },
+    global.postMessage = function(messageKey, targetOrigin) {
+      const postMessageEvent = {source: window, data: messageKey};
+      if (postMessageCallback) {
+        postMessageCallback(postMessageEvent);
+      }
     };
 
     jest.resetModules();
-    require('shared/ReactFeatureFlags').enableCreateRoot = true;
     React = require('react');
     ReactDOM = require('react-dom');
     ReactDOMServer = require('react-dom/server');
@@ -74,31 +67,31 @@ describe('ReactDOMRoot', () => {
   });
 
   it('renders children', () => {
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     root.render(<div>Hi</div>);
-    flush();
+    jest.runAllTimers();
     expect(container.textContent).toEqual('Hi');
   });
 
   it('unmounts children', () => {
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     root.render(<div>Hi</div>);
-    flush();
+    jest.runAllTimers();
     expect(container.textContent).toEqual('Hi');
     root.unmount();
-    flush();
+    jest.runAllTimers();
     expect(container.textContent).toEqual('');
   });
 
   it('`root.render` returns a thenable work object', () => {
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     const work = root.render(<AsyncMode>Hi</AsyncMode>);
     let ops = [];
     work.then(() => {
       ops.push('inside callback: ' + container.textContent);
     });
     ops.push('before committing: ' + container.textContent);
-    flush();
+    jest.runAllTimers();
     ops.push('after committing: ' + container.textContent);
     expect(ops).toEqual([
       'before committing: ',
@@ -109,9 +102,9 @@ describe('ReactDOMRoot', () => {
   });
 
   it('resolves `work.then` callback synchronously if the work already committed', () => {
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     const work = root.render(<AsyncMode>Hi</AsyncMode>);
-    flush();
+    jest.runAllTimers();
     let ops = [];
     work.then(() => {
       ops.push('inside callback');
@@ -133,36 +126,36 @@ describe('ReactDOMRoot', () => {
     // Does not hydrate by default
     const container1 = document.createElement('div');
     container1.innerHTML = markup;
-    const root1 = ReactDOM.createRoot(container1);
+    const root1 = ReactDOM.unstable_createRoot(container1);
     root1.render(
       <div>
         <span />
       </div>,
     );
-    flush();
+    jest.runAllTimers();
 
     // Accepts `hydrate` option
     const container2 = document.createElement('div');
     container2.innerHTML = markup;
-    const root2 = ReactDOM.createRoot(container2, {hydrate: true});
+    const root2 = ReactDOM.unstable_createRoot(container2, {hydrate: true});
     root2.render(
       <div>
         <span />
       </div>,
     );
-    expect(flush).toWarnDev('Extra attributes');
+    expect(jest.runAllTimers).toWarnDev('Extra attributes');
   });
 
   it('does not clear existing children', async () => {
     container.innerHTML = '<div>a</div><div>b</div>';
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     root.render(
       <div>
         <span>c</span>
         <span>d</span>
       </div>,
     );
-    flush();
+    jest.runAllTimers();
     expect(container.textContent).toEqual('abcd');
     root.render(
       <div>
@@ -170,12 +163,12 @@ describe('ReactDOMRoot', () => {
         <span>c</span>
       </div>,
     );
-    flush();
+    jest.runAllTimers();
     expect(container.textContent).toEqual('abdc');
   });
 
   it('can defer a commit by batching it', () => {
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     const batch = root.createBatch();
     batch.render(<div>Hi</div>);
     // Hasn't committed yet
@@ -185,17 +178,57 @@ describe('ReactDOMRoot', () => {
     expect(container.textContent).toEqual('Hi');
   });
 
+  it('applies setState in componentDidMount synchronously in a batch', done => {
+    class App extends React.Component {
+      state = {mounted: false};
+      componentDidMount() {
+        this.setState({
+          mounted: true,
+        });
+      }
+      render() {
+        return this.state.mounted ? 'Hi' : 'Bye';
+      }
+    }
+
+    const root = ReactDOM.unstable_createRoot(container);
+    const batch = root.createBatch();
+    batch.render(
+      <AsyncMode>
+        <App />
+      </AsyncMode>,
+    );
+
+    jest.runAllTimers();
+
+    // Hasn't updated yet
+    expect(container.textContent).toEqual('');
+
+    let ops = [];
+    batch.then(() => {
+      // Still hasn't updated
+      ops.push(container.textContent);
+
+      // Should synchronously commit
+      batch.commit();
+      ops.push(container.textContent);
+
+      expect(ops).toEqual(['', 'Hi']);
+      done();
+    });
+  });
+
   it('does not restart a completed batch when committing if there were no intervening updates', () => {
     let ops = [];
     function Foo(props) {
       ops.push('Foo');
       return props.children;
     }
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     const batch = root.createBatch();
     batch.render(<Foo>Hi</Foo>);
     // Flush all async work.
-    flush();
+    jest.runAllTimers();
     // Root should complete without committing.
     expect(ops).toEqual(['Foo']);
     expect(container.textContent).toEqual('');
@@ -209,11 +242,11 @@ describe('ReactDOMRoot', () => {
   });
 
   it('can wait for a batch to finish', () => {
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     const batch = root.createBatch();
     batch.render(<AsyncMode>Foo</AsyncMode>);
 
-    flush();
+    jest.runAllTimers();
 
     // Hasn't updated yet
     expect(container.textContent).toEqual('');
@@ -231,7 +264,7 @@ describe('ReactDOMRoot', () => {
   });
 
   it('`batch.render` returns a thenable work object', () => {
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     const batch = root.createBatch();
     const work = batch.render('Hi');
     let ops = [];
@@ -250,10 +283,10 @@ describe('ReactDOMRoot', () => {
   });
 
   it('can commit an empty batch', () => {
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     root.render(<AsyncMode>1</AsyncMode>);
 
-    expire(2000);
+    advanceCurrentTime(2000);
     // This batch has a later expiration time than the earlier update.
     const batch = root.createBatch();
 
@@ -261,13 +294,13 @@ describe('ReactDOMRoot', () => {
     batch.commit();
     expect(container.textContent).toEqual('');
 
-    flush();
+    jest.runAllTimers();
     expect(container.textContent).toEqual('1');
   });
 
   it('two batches created simultaneously are committed separately', () => {
     // (In other words, they have distinct expiration times)
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     const batch1 = root.createBatch();
     batch1.render(1);
     const batch2 = root.createBatch();
@@ -283,12 +316,12 @@ describe('ReactDOMRoot', () => {
   });
 
   it('commits an earlier batch without committing a later batch', () => {
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     const batch1 = root.createBatch();
     batch1.render(1);
 
     // This batch has a later expiration time
-    expire(2000);
+    advanceCurrentTime(2000);
     const batch2 = root.createBatch();
     batch2.render(2);
 
@@ -302,12 +335,12 @@ describe('ReactDOMRoot', () => {
   });
 
   it('commits a later batch without committing an earlier batch', () => {
-    const root = ReactDOM.createRoot(container);
+    const root = ReactDOM.unstable_createRoot(container);
     const batch1 = root.createBatch();
     batch1.render(1);
 
     // This batch has a later expiration time
-    expire(2000);
+    advanceCurrentTime(2000);
     const batch2 = root.createBatch();
     batch2.render(2);
 
@@ -317,7 +350,17 @@ describe('ReactDOMRoot', () => {
     expect(container.textContent).toEqual('2');
 
     batch1.commit();
-    flush();
+    jest.runAllTimers();
     expect(container.textContent).toEqual('1');
+  });
+
+  it('handles fatal errors triggered by batch.commit()', () => {
+    const root = ReactDOM.unstable_createRoot(container);
+    const batch = root.createBatch();
+    const InvalidType = undefined;
+    expect(() => batch.render(<InvalidType />)).toWarnDev([
+      'React.createElement: type is invalid',
+    ]);
+    expect(() => batch.commit()).toThrow('Element type is invalid');
   });
 });

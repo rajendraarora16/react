@@ -7,6 +7,21 @@
  * @flow
  */
 
+'use strict';
+
+/**
+ * A scheduling library to allow scheduling work with more granular priority and
+ * control than requestAnimationFrame and requestIdleCallback.
+ * Current TODO items:
+ * X- Pull out the rIC polyfill built into React
+ * - Initial test coverage
+ * - Support for multiple callbacks
+ * - Support for two priorities; serial and deferred
+ * - Better test coverage
+ * - Better docblock
+ * - Polish documentation, API
+ */
+
 // This is a built-in polyfill for requestIdleCallback. It works by scheduling
 // a requestAnimationFrame, storing the time for the start of the frame, then
 // scheduling a postMessage which gets scheduled after paint. Within the
@@ -17,7 +32,6 @@
 
 import type {Deadline} from 'react-reconciler';
 
-import {alwaysUseRequestIdleCallbackPolyfill} from 'shared/ReactFeatureFlags';
 import ExecutionEnvironment from 'fbjs/lib/ExecutionEnvironment';
 import warning from 'fbjs/lib/warning';
 
@@ -63,18 +77,15 @@ if (!ExecutionEnvironment.canUseDOM) {
         timeRemaining() {
           return Infinity;
         },
+        didTimeout: false,
       });
     });
   };
   cIC = function(timeoutID: number) {
     clearTimeout(timeoutID);
   };
-} else if (
-  alwaysUseRequestIdleCallbackPolyfill ||
-  typeof requestIdleCallback !== 'function' ||
-  typeof cancelIdleCallback !== 'function'
-) {
-  // Polyfill requestIdleCallback and cancelIdleCallback
+} else {
+  // Always polyfill requestIdleCallback and cancelIdleCallback
 
   let scheduledRICCallback = null;
   let isIdleScheduled = false;
@@ -215,9 +226,6 @@ if (!ExecutionEnvironment.canUseDOM) {
     isIdleScheduled = false;
     timeoutTime = -1;
   };
-} else {
-  rIC = window.requestIdleCallback;
-  cIC = window.cancelIdleCallback;
 }
 
 export {now, rIC, cIC};
