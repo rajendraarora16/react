@@ -37,8 +37,16 @@ import {
   MemoComponent,
   SimpleMemoComponent,
   LazyComponent,
+  IncompleteClassComponent,
 } from 'shared/ReactWorkTags';
-import {Placement, Ref, Update} from 'shared/ReactSideEffectTags';
+import {
+  Placement,
+  Ref,
+  Update,
+  NoEffect,
+  DidCapture,
+  Deletion,
+} from 'shared/ReactSideEffectTags';
 import invariant from 'shared/invariant';
 
 import {
@@ -74,6 +82,7 @@ import {
   prepareToHydrateHostTextInstance,
   popHydrationState,
 } from './ReactFiberHydrationContext';
+import {ConcurrentMode, NoContext} from './ReactTypeOfMode';
 
 function markUpdate(workInProgress: Fiber) {
   // Tag the fiber with an update effect. This turns a Placement into
@@ -246,8 +255,8 @@ if (supportsMutation) {
         if (current !== null) {
           const oldState: SuspenseState = current.memoizedState;
           const newState: SuspenseState = node.memoizedState;
-          const oldIsHidden = oldState !== null && oldState.didTimeout;
-          const newIsHidden = newState !== null && newState.didTimeout;
+          const oldIsHidden = oldState !== null;
+          const newIsHidden = newState !== null;
           if (oldIsHidden !== newIsHidden) {
             // The placeholder either just timed out or switched back to the normal
             // children after having previously timed out. Toggle the visibility of
@@ -349,8 +358,8 @@ if (supportsMutation) {
         if (current !== null) {
           const oldState: SuspenseState = current.memoizedState;
           const newState: SuspenseState = node.memoizedState;
-          const oldIsHidden = oldState !== null && oldState.didTimeout;
-          const newIsHidden = newState !== null && newState.didTimeout;
+          const oldIsHidden = oldState !== null;
+          const newIsHidden = newState !== null;
           if (oldIsHidden !== newIsHidden) {
             // The placeholder either just timed out or switched back to the normal
             // children after having previously timed out. Toggle the visibility of
@@ -689,12 +698,48 @@ function completeWork(
       break;
     case SuspenseComponent: {
       const nextState = workInProgress.memoizedState;
-      const prevState = current !== null ? current.memoizedState : null;
-      const nextDidTimeout = nextState !== null && nextState.didTimeout;
-      const prevDidTimeout = prevState !== null && prevState.didTimeout;
-      if (nextDidTimeout !== prevDidTimeout) {
-        // If this render commits, and it switches between the normal state
-        // and the timed-out state, schedule an effect.
+      if ((workInProgress.effectTag & DidCapture) !== NoEffect) {
+        // Something suspended. Re-render with the fallback children.
+        workInProgress.expirationTime = renderExpirationTime;
+        // Do not reset the effect list.
+        return workInProgress;
+      }
+
+      const nextDidTimeout = nextState !== null;
+      const prevDidTimeout = current !== null && current.memoizedState !== null;
+
+      if (current !== null && !nextDidTimeout && prevDidTimeout) {
+        // We just switched from the fallback to the normal children. Delete
+        // the fallback.
+        // TODO: Would it be better to store the fallback fragment on
+        // the stateNode during the begin phase?
+        const currentFallbackChild: Fiber | null = (current.child: any).sibling;
+        if (currentFallbackChild !== null) {
+          // Deletions go at the beginning of the return fiber's effect list
+          const first = workInProgress.firstEffect;
+          if (first !== null) {
+            workInProgress.firstEffect = currentFallbackChild;
+            currentFallbackChild.nextEffect = first;
+          } else {
+            workInProgress.firstEffect = workInProgress.lastEffect = currentFallbackChild;
+            currentFallbackChild.nextEffect = null;
+          }
+          currentFallbackChild.effectTag = Deletion;
+        }
+      }
+
+      // The children either timed out after previously being visible, or
+      // were restored after previously being hidden. Schedule an effect
+      // to update their visiblity.
+      if (
+        //
+        nextDidTimeout !== prevDidTimeout ||
+        // Outside concurrent mode, the primary children commit in an
+        // inconsistent state, even if they are hidden. So if they are hidden,
+        // we need to schedule an effect to re-hide them, just in case.
+        ((workInProgress.effectTag & ConcurrentMode) === NoContext &&
+          nextDidTimeout)
+      ) {
         workInProgress.effectTag |= Update;
       }
       break;
@@ -717,6 +762,15 @@ function completeWork(
       break;
     case MemoComponent:
       break;
+    case IncompleteClassComponent: {
+      // Same as class component case. I put it down here so that the tags are
+      // sequential to ensure this switch is compiled to a jump table.
+      const Component = workInProgress.type;
+      if (isLegacyContextProvider(Component)) {
+        popLegacyContext(workInProgress);
+      }
+      break;
+    }
     default:
       invariant(
         false,
