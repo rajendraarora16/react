@@ -82,7 +82,7 @@ describe('ReactHooksInspectionIntergration', () => {
       React.useLayoutEffect(effect);
       React.useEffect(effect);
 
-      React.useImperativeMethods(
+      React.useImperativeHandle(
         outsideRef,
         () => {
           // Return a function so that jest treats them as non-equal.
@@ -118,7 +118,7 @@ describe('ReactHooksInspectionIntergration', () => {
       {name: 'Ref', value: 'c', subHooks: []},
       {name: 'LayoutEffect', value: effect, subHooks: []},
       {name: 'Effect', value: effect, subHooks: []},
-      {name: 'ImperativeMethods', value: outsideRef.current, subHooks: []},
+      {name: 'ImperativeHandle', value: outsideRef.current, subHooks: []},
       {name: 'Memo', value: 'ab', subHooks: []},
       {name: 'Callback', value: updateStates, subHooks: []},
     ]);
@@ -134,7 +134,7 @@ describe('ReactHooksInspectionIntergration', () => {
       {name: 'Ref', value: 'C', subHooks: []},
       {name: 'LayoutEffect', value: effect, subHooks: []},
       {name: 'Effect', value: effect, subHooks: []},
-      {name: 'ImperativeMethods', value: outsideRef.current, subHooks: []},
+      {name: 'ImperativeHandle', value: outsideRef.current, subHooks: []},
       {name: 'Memo', value: 'Ab', subHooks: []},
       {name: 'Callback', value: updateStates, subHooks: []},
     ]);
@@ -165,7 +165,7 @@ describe('ReactHooksInspectionIntergration', () => {
   it('should inspect forwardRef', () => {
     let obj = function() {};
     let Foo = React.forwardRef(function(props, ref) {
-      React.useImperativeMethods(ref, () => obj);
+      React.useImperativeHandle(ref, () => obj);
       return <div />;
     });
     let ref = React.createRef();
@@ -174,7 +174,7 @@ describe('ReactHooksInspectionIntergration', () => {
     let childFiber = renderer.root.findByType(Foo)._currentFiber();
     let tree = ReactDebugTools.inspectHooksOfFiber(childFiber);
     expect(tree).toEqual([
-      {name: 'ImperativeMethods', value: obj, subHooks: []},
+      {name: 'ImperativeHandle', value: obj, subHooks: []},
     ]);
   });
 
@@ -240,5 +240,40 @@ describe('ReactHooksInspectionIntergration', () => {
     let childFiber = renderer.root._currentFiber();
     let tree = ReactDebugTools.inspectHooksOfFiber(childFiber);
     expect(tree).toEqual([{name: 'State', value: 'def', subHooks: []}]);
+  });
+
+  it('should support an injected dispatcher', () => {
+    function Foo(props) {
+      let [state] = React.useState('hello world');
+      return <div>{state}</div>;
+    }
+
+    let initial = {};
+    let current = initial;
+    let getterCalls = 0;
+    let setterCalls = [];
+    let FakeDispatcherRef = {
+      get current() {
+        getterCalls++;
+        return current;
+      },
+      set current(value) {
+        setterCalls.push(value);
+        current = value;
+      },
+    };
+
+    let renderer = ReactTestRenderer.create(<Foo />);
+    let childFiber = renderer.root._currentFiber();
+    expect(() => {
+      ReactDebugTools.inspectHooksOfFiber(childFiber, FakeDispatcherRef);
+    }).toThrow(
+      'Hooks can only be called inside the body of a function component.',
+    );
+
+    expect(getterCalls).toBe(1);
+    expect(setterCalls).toHaveLength(2);
+    expect(setterCalls[0]).not.toBe(initial);
+    expect(setterCalls[1]).toBe(initial);
   });
 });
