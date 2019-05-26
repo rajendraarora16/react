@@ -11,9 +11,16 @@ import type {AnyNativeEvent} from 'events/PluginModuleType';
 import type {Fiber} from 'react-reconciler/src/ReactFiber';
 import type {DOMTopLevelEventType} from 'events/TopLevelEventTypes';
 
-import {batchedUpdates, interactiveUpdates} from 'events/ReactGenericBatching';
+import {
+  batchedEventUpdates,
+  discreteUpdates,
+  flushDiscreteUpdates,
+} from 'events/ReactGenericBatching';
 import {runExtractedPluginEventsInBatch} from 'events/EventPluginHub';
-import {dispatchEventForResponderEventSystem} from '../events/DOMEventResponderSystem';
+import {
+  dispatchEventForResponderEventSystem,
+  shouldflushDiscreteUpdates,
+} from '../events/DOMEventResponderSystem';
 import {isFiberMounted} from 'react-reconciler/reflection';
 import {HostRoot} from 'shared/ReactWorkTags';
 import {
@@ -28,7 +35,7 @@ import {
 import {
   addEventBubbleListener,
   addEventCaptureListener,
-  addEventListener,
+  addEventCaptureListenerWithPassiveFlag,
 } from './EventListener';
 import getEventTarget from './getEventTarget';
 import {getClosestInstanceFromNode} from '../client/ReactDOMComponentTree';
@@ -167,7 +174,6 @@ export function trapCapturedEvent(
 export function trapEventForResponderEventSystem(
   element: Document | Element | Node,
   topLevelType: DOMTopLevelEventType,
-  capture: boolean,
   passive: boolean,
 ): void {
   if (enableEventAPI) {
@@ -189,12 +195,18 @@ export function trapEventForResponderEventSystem(
     } else {
       eventFlags |= IS_ACTIVE;
     }
-    // Check if interactive and wrap in interactiveUpdates
+    // Check if interactive and wrap in discreteUpdates
     const listener = dispatchEvent.bind(null, topLevelType, eventFlags);
-    addEventListener(element, rawEventName, listener, {
-      capture,
-      passive,
-    });
+    if (passiveBrowserEventsSupported) {
+      addEventCaptureListenerWithPassiveFlag(
+        element,
+        rawEventName,
+        listener,
+        passive,
+      );
+    } else {
+      addEventCaptureListener(element, rawEventName, listener);
+    }
   }
 }
 
@@ -207,7 +219,7 @@ function trapEventForPluginEventSystem(
     ? dispatchInteractiveEvent
     : dispatchEvent;
   const rawEventName = getRawEventName(topLevelType);
-  // Check if interactive and wrap in interactiveUpdates
+  // Check if interactive and wrap in discreteUpdates
   const listener = dispatch.bind(null, topLevelType, PLUGIN_EVENT_SYSTEM);
   if (capture) {
     addEventCaptureListener(element, rawEventName, listener);
@@ -217,12 +229,10 @@ function trapEventForPluginEventSystem(
 }
 
 function dispatchInteractiveEvent(topLevelType, eventSystemFlags, nativeEvent) {
-  interactiveUpdates(
-    dispatchEvent,
-    topLevelType,
-    eventSystemFlags,
-    nativeEvent,
-  );
+  if (!enableEventAPI || shouldflushDiscreteUpdates(nativeEvent.timeStamp)) {
+    flushDiscreteUpdates();
+  }
+  discreteUpdates(dispatchEvent, topLevelType, eventSystemFlags, nativeEvent);
 }
 
 function dispatchEventForPluginEventSystem(
@@ -240,7 +250,7 @@ function dispatchEventForPluginEventSystem(
   try {
     // Event queue being processed in the same cycle allows
     // `preventDefault`.
-    batchedUpdates(handleTopLevel, bookKeeping);
+    batchedEventUpdates(handleTopLevel, bookKeeping);
   } finally {
     releaseTopLevelCallbackBookKeeping(bookKeeping);
   }

@@ -34,14 +34,15 @@ describe('ReactNative', () => {
     ReactFeatureFlags = require('shared/ReactFeatureFlags');
     ReactFeatureFlags.warnAboutDeprecatedSetNativeProps = true;
     ReactNative = require('react-native-renderer');
-    UIManager = require('UIManager');
+    UIManager = require('react-native/Libraries/ReactPrivate/ReactNativePrivateInterface')
+      .UIManager;
     createReactClass = require('create-react-class/factory')(
       React.Component,
       React.isValidElement,
       new React.Component().updater,
     );
-    createReactNativeComponentClass = require('ReactNativeViewConfigRegistry')
-      .register;
+    createReactNativeComponentClass = require('react-native/Libraries/ReactPrivate/ReactNativePrivateInterface')
+      .ReactNativeViewConfigRegistry.register;
     NativeMethodsMixin =
       ReactNative.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED
         .NativeMethodsMixin;
@@ -486,7 +487,7 @@ describe('ReactNative', () => {
     expect(mockArgs.length).toEqual(0);
   });
 
-  it('should throw when <View> is used inside of a <Text> ancestor', () => {
+  it('should not throw when <View> is used inside of a <Text> ancestor', () => {
     const Image = createReactNativeComponentClass('RCTImage', () => ({
       validAttributes: {},
       uiViewClassName: 'RCTImage',
@@ -500,14 +501,12 @@ describe('ReactNative', () => {
       uiViewClassName: 'RCTView',
     }));
 
-    expect(() =>
-      ReactNative.render(
-        <Text>
-          <View />
-        </Text>,
-        11,
-      ),
-    ).toThrow('Nesting of <View> within <Text> is not currently supported.');
+    ReactNative.render(
+      <Text>
+        <View />
+      </Text>,
+      11,
+    );
 
     // Non-View things (e.g. Image) are fine
     ReactNative.render(
