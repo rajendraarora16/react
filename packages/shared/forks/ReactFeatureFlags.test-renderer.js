@@ -21,7 +21,6 @@ export const enableProfilerTimer = false;
 export const enableSchedulerTracing = false;
 export const enableSuspenseServerRenderer = false;
 export const disableJavaScriptURLs = false;
-export const disableYielding = false;
 export const disableInputAttributeSyncing = false;
 export const enableStableConcurrentModeAPIs = false;
 export const warnAboutShorthandPropertyCollision = false;
@@ -31,6 +30,7 @@ export const enableEventAPI = false;
 export const enableJSXTransformAPI = false;
 export const warnAboutMissingMockScheduler = false;
 export const revertPassiveEffectsChange = false;
+export const enableUserBlockingEvents = false;
 
 // Only used in www builds.
 export function addUserTimingListener() {

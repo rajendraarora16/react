@@ -8,11 +8,13 @@
  */
 
 import type {
+  PointerType,
   ReactResponderEvent,
   ReactResponderContext,
 } from 'shared/ReactTypes';
 
 import React from 'react';
+import {DiscreteEvent} from 'shared/ReactTypes';
 
 type FocusProps = {
   disabled: boolean,
@@ -29,7 +31,6 @@ type FocusState = {
   pointerType: PointerType,
 };
 
-type PointerType = '' | 'mouse' | 'keyboard' | 'pen' | 'touch';
 type FocusEventType = 'focus' | 'blur' | 'focuschange' | 'focusvisiblechange';
 
 type FocusEvent = {|
@@ -39,6 +40,11 @@ type FocusEvent = {|
   timeStamp: number,
 |};
 
+const isMac =
+  typeof window !== 'undefined' && window.navigator != null
+    ? /^Mac/.test(window.navigator.platform)
+    : false;
+
 const targetEventTypes = [
   {name: 'focus', passive: true},
   {name: 'blur', passive: true},
@@ -46,7 +52,6 @@ const targetEventTypes = [
 
 const rootEventTypes = [
   'keydown',
-  'keypress',
   'keyup',
   'pointermove',
   'pointerdown',
@@ -93,7 +98,7 @@ function dispatchFocusInEvents(
       target,
       pointerType,
     );
-    context.dispatchEvent(syntheticEvent, props.onFocus, true);
+    context.dispatchEvent(syntheticEvent, props.onFocus, DiscreteEvent);
   }
   if (props.onFocusChange) {
     const listener = () => {
@@ -105,7 +110,7 @@ function dispatchFocusInEvents(
       target,
       pointerType,
     );
-    context.dispatchEvent(syntheticEvent, listener, true);
+    context.dispatchEvent(syntheticEvent, listener, DiscreteEvent);
   }
   if (props.onFocusVisibleChange && state.isLocalFocusVisible) {
     const listener = () => {
@@ -117,7 +122,7 @@ function dispatchFocusInEvents(
       target,
       pointerType,
     );
-    context.dispatchEvent(syntheticEvent, listener, true);
+    context.dispatchEvent(syntheticEvent, listener, DiscreteEvent);
   }
 }
 
@@ -135,7 +140,7 @@ function dispatchFocusOutEvents(
       target,
       pointerType,
     );
-    context.dispatchEvent(syntheticEvent, props.onBlur, true);
+    context.dispatchEvent(syntheticEvent, props.onBlur, DiscreteEvent);
   }
   if (props.onFocusChange) {
     const listener = () => {
@@ -147,7 +152,7 @@ function dispatchFocusOutEvents(
       target,
       pointerType,
     );
-    context.dispatchEvent(syntheticEvent, listener, true);
+    context.dispatchEvent(syntheticEvent, listener, DiscreteEvent);
   }
   dispatchFocusVisibleOutEvent(context, props, state);
 }
@@ -169,7 +174,7 @@ function dispatchFocusVisibleOutEvent(
       target,
       pointerType,
     );
-    context.dispatchEvent(syntheticEvent, listener, true);
+    context.dispatchEvent(syntheticEvent, listener, DiscreteEvent);
     state.isLocalFocusVisible = false;
   }
 }
@@ -223,7 +228,6 @@ const FocusResponder = {
     };
   },
   allowMultipleHostChildren: false,
-  stopLocalPropagation: true,
   onEvent(
     event: ReactResponderEvent,
     context: ReactResponderContext,
@@ -299,12 +303,15 @@ const FocusResponder = {
       }
 
       case 'keydown':
-      case 'keypress':
       case 'keyup': {
         const nativeEvent = event.nativeEvent;
         if (
           nativeEvent.key === 'Tab' &&
-          !(nativeEvent.metaKey || nativeEvent.altKey || nativeEvent.ctrlKey)
+          !(
+            nativeEvent.metaKey ||
+            (!isMac && nativeEvent.altKey) ||
+            nativeEvent.ctrlKey
+          )
         ) {
           state.pointerType = 'keyboard';
           isGlobalFocusVisible = true;

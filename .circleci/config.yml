@@ -118,14 +118,33 @@ jobs:
   build:
     docker: *docker
     environment: *environment
+    parallelism: 20
     steps:
       - checkout
       - *restore_yarn_cache
       - *run_yarn
       - run: ./scripts/circleci/add_build_info_json.sh
       - run: ./scripts/circleci/update_package_versions.sh
-      - run: ./scripts/circleci/build.sh
-      - run: cp ./scripts/rollup/results.json ./build/bundle-sizes.json
+      - run: yarn build
+      - persist_to_workspace:
+          root: build
+          paths:
+            - facebook-www
+            - node_modules
+            - react-native
+            - dist
+            - sizes/*.json
+
+  process_artifacts:
+    docker: *docker
+    environment: *environment
+    steps:
+      - checkout
+      - attach_workspace: *attach_workspace
+      - *restore_yarn_cache
+      - *run_yarn
+      - run: node ./scripts/rollup/consolidateBundleSizes.js
+      - run: node ./scripts/tasks/danger
       - run: ./scripts/circleci/upload_build.sh
       - run: ./scripts/circleci/pack_and_store_artifact.sh
       - store_artifacts:
@@ -135,17 +154,11 @@ jobs:
       - store_artifacts:
           path: ./build/bundle-sizes.json
       - store_artifacts:
+          # TODO: Update release script to use local file instead of pulling
+          # from artifacts.
           path: ./scripts/error-codes/codes.json
-      - persist_to_workspace:
-          root: build
-          paths:
-            - facebook-www
-            - node_modules
-            - react-native
-            - bundle-sizes.json
 
-  sizebot:
-    build:
+  lint_build:
     docker: *docker
     environment: *environment
     steps:
@@ -153,7 +166,8 @@ jobs:
       - attach_workspace: *attach_workspace
       - *restore_yarn_cache
       - *run_yarn
-      - run: node ./scripts/tasks/danger
+      - run: yarn lint-build
+      - run: scripts/circleci/check_minified_errors.sh
 
   test_build:
     docker: *docker
@@ -165,6 +179,21 @@ jobs:
       - *run_yarn
       - run: yarn test-build --maxWorkers=2
 
+  test_dom_fixtures:
+    docker: *docker
+    environment: *environment
+    steps:
+      - checkout
+      - attach_workspace: *attach_workspace
+      - *restore_yarn_cache
+      - run:
+          name: Run DOM fixture tests
+          command: |
+            cd fixtures/dom
+            yarn --frozen-lockfile
+            yarn prestart
+            yarn test --maxWorkers=2
+
   test_fuzz:
     docker: *docker
     environment: *environment
@@ -175,10 +204,8 @@ jobs:
       - run:
           name: Run fuzz tests
           command: |
-            FUZZ_TEST_SEED=$RANDOM
-            echo $FUZZ_TEST_SEED
-            yarn test fuzz --maxWorkers=2
-            yarn test-prod fuzz --maxWorkers=2
+            FUZZ_TEST_SEED=$RANDOM yarn test fuzz --maxWorkers=2
+            FUZZ_TEST_SEED=$RANDOM yarn test-prod fuzz --maxWorkers=2
 
   test_build_prod:
     docker: *docker
@@ -213,19 +240,22 @@ workflows:
       - test_source_fire:
           requires:
             - setup
-      - test_coverage:
-          requires:
-            - setup
       - build:
           requires:
             - setup
-      - sizebot:
+      - process_artifacts:
+          requires:
+            - build
+      - lint_build:
           requires:
             - build
       - test_build:
           requires:
             - build
       - test_build_prod:
+          requires:
+            - build
+      - test_dom_fixtures:
           requires:
             - build
   hourly:
@@ -239,5 +269,8 @@ workflows:
     jobs:
       - setup
       - test_fuzz:
+          requires:
+            - setup
+      - test_coverage:
           requires:
             - setup

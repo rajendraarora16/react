@@ -13,6 +13,10 @@ let React;
 let ReactFeatureFlags;
 let ReactDOM;
 
+// FIXME: What should the public API be for setting an event's priority? Right
+// now it's an enum but is that what we want? Hard coding this for now.
+const DiscreteEvent = 0;
+
 function createReactEventComponent({
   targetEventTypes,
   rootEventTypes,
@@ -23,7 +27,6 @@ function createReactEventComponent({
   onMount,
   onUnmount,
   onOwnershipChange,
-  stopLocalPropagation,
   allowMultipleHostChildren,
 }) {
   const testEventResponder = {
@@ -36,7 +39,6 @@ function createReactEventComponent({
     onMount,
     onUnmount,
     onOwnershipChange,
-    stopLocalPropagation: stopLocalPropagation || false,
     allowMultipleHostChildren: allowMultipleHostChildren || false,
   };
 
@@ -211,6 +213,7 @@ describe('DOMEventResponderSystem', () => {
     const ClickEventComponent = createReactEventComponent({
       targetEventTypes: ['click'],
       onEvent: (event, context, props) => {
+        context.continueLocalPropagation();
         eventResponderFiredCount++;
         eventLog.push({
           name: event.type,
@@ -220,6 +223,7 @@ describe('DOMEventResponderSystem', () => {
         });
       },
       onEventCapture: (event, context, props) => {
+        context.continueLocalPropagation();
         eventResponderFiredCount++;
         eventLog.push({
           name: event.type,
@@ -320,19 +324,20 @@ describe('DOMEventResponderSystem', () => {
     ]);
   });
 
-  it('nested event responders should fire in the correct order without stopLocalPropagation', () => {
+  it('nested event responders should fire in the correct order with continueLocalPropagation', () => {
     let eventLog = [];
     const buttonRef = React.createRef();
 
     const ClickEventComponent = createReactEventComponent({
       targetEventTypes: ['click'],
       onEvent: (event, context, props) => {
+        context.continueLocalPropagation();
         eventLog.push(`${props.name} [bubble]`);
       },
       onEventCapture: (event, context, props) => {
+        context.continueLocalPropagation();
         eventLog.push(`${props.name} [capture]`);
       },
-      stopLocalPropagation: false,
     });
 
     const Test = () => (
@@ -357,7 +362,7 @@ describe('DOMEventResponderSystem', () => {
     ]);
   });
 
-  it('nested event responders should fire in the correct order with stopLocalPropagation', () => {
+  it('nested event responders should fire in the correct order', () => {
     let eventLog = [];
     const buttonRef = React.createRef();
 
@@ -369,7 +374,6 @@ describe('DOMEventResponderSystem', () => {
       onEventCapture: (event, context, props) => {
         eventLog.push(`${props.name} [capture]`);
       },
-      stopLocalPropagation: true,
     });
 
     const Test = () => (
@@ -403,7 +407,11 @@ describe('DOMEventResponderSystem', () => {
             phase: 'bubble',
             timeStamp: context.getTimeStamp(),
           };
-          context.dispatchEvent(syntheticEvent, props.onMagicClick, true);
+          context.dispatchEvent(
+            syntheticEvent,
+            props.onMagicClick,
+            DiscreteEvent,
+          );
         }
       },
       onEventCapture: (event, context, props) => {
@@ -414,7 +422,11 @@ describe('DOMEventResponderSystem', () => {
             phase: 'capture',
             timeStamp: context.getTimeStamp(),
           };
-          context.dispatchEvent(syntheticEvent, props.onMagicClick, true);
+          context.dispatchEvent(
+            syntheticEvent,
+            props.onMagicClick,
+            DiscreteEvent,
+          );
         }
       },
     });
@@ -456,7 +468,7 @@ describe('DOMEventResponderSystem', () => {
         phase,
         timeStamp: context.getTimeStamp(),
       };
-      context.dispatchEvent(pressEvent, props.onPress, true);
+      context.dispatchEvent(pressEvent, props.onPress, DiscreteEvent);
 
       context.setTimeout(() => {
         if (props.onLongPress) {
@@ -466,7 +478,11 @@ describe('DOMEventResponderSystem', () => {
             phase,
             timeStamp: context.getTimeStamp(),
           };
-          context.dispatchEvent(longPressEvent, props.onLongPress, true);
+          context.dispatchEvent(
+            longPressEvent,
+            props.onLongPress,
+            DiscreteEvent,
+          );
         }
 
         if (props.onLongPressChange) {
@@ -479,7 +495,7 @@ describe('DOMEventResponderSystem', () => {
           context.dispatchEvent(
             longPressChangeEvent,
             props.onLongPressChange,
-            true,
+            DiscreteEvent,
           );
         }
       }, 500);
@@ -670,6 +686,7 @@ describe('DOMEventResponderSystem', () => {
     const EventComponent = createReactEventComponent({
       targetEventTypes: ['pointerout'],
       onEvent: (event, context) => {
+        context.continueLocalPropagation();
         const isWithin = context.isTargetWithinEventResponderScope(
           event.nativeEvent.relatedTarget,
         );
@@ -838,7 +855,7 @@ describe('DOMEventResponderSystem', () => {
           type: 'click',
           timeStamp: context.getTimeStamp(),
         };
-        context.dispatchEvent(syntheticEvent, props.onClick, true);
+        context.dispatchEvent(syntheticEvent, props.onClick, DiscreteEvent);
       },
     });
 

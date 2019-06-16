@@ -16,11 +16,11 @@ export const {
   debugRenderPhaseSideEffectsForStrictMode,
   replayFailedUnitOfWorkWithInvokeGuardedCallback,
   warnAboutDeprecatedLifecycles,
-  disableYielding,
   disableInputAttributeSyncing,
   warnAboutShorthandPropertyCollision,
   warnAboutDeprecatedSetNativeProps,
   revertPassiveEffectsChange,
+  enableUserBlockingEvents,
 } = require('ReactFeatureFlags');
 
 // In www, we have experimental support for gathering data

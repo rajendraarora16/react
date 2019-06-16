@@ -56,6 +56,8 @@ import {
   discreteUpdates,
   flushDiscreteUpdates,
   flushPassiveEffects,
+  warnIfNotScopedWithMatchingAct,
+  ReactActingRendererSigil,
 } from './ReactFiberWorkLoop';
 import {createUpdate, enqueueUpdate} from './ReactUpdateQueue';
 import ReactFiberInstrumentation from './ReactFiberInstrumentation';
@@ -68,7 +70,10 @@ import {StrictMode} from './ReactTypeOfMode';
 import {Sync} from './ReactFiberExpirationTime';
 import {revertPassiveEffectsChange} from 'shared/ReactFeatureFlags';
 import {requestCurrentSuspenseConfig} from './ReactFiberSuspenseConfig';
-import {scheduleHotUpdate} from './ReactFiberHotReloading';
+import {
+  scheduleHotUpdate,
+  findHostNodesForHotUpdate,
+} from './ReactFiberHotReloading';
 
 type OpaqueRoot = FiberRoot;
 
@@ -303,6 +308,12 @@ export function updateContainer(
 ): ExpirationTime {
   const current = container.current;
   const currentTime = requestCurrentTime();
+  if (__DEV__) {
+    // $FlowExpectedError - jest isn't a global, and isn't recognized outside of tests
+    if ('undefined' !== typeof jest) {
+      warnIfNotScopedWithMatchingAct(current);
+    }
+  }
   const suspenseConfig = requestCurrentSuspenseConfig();
   const expirationTime = computeExpirationForFiber(
     currentTime,
@@ -332,6 +343,7 @@ export {
   flushControlled,
   flushSync,
   flushPassiveEffects,
+  ReactActingRendererSigil,
 };
 
 export function getPublicRootInstance(
@@ -463,6 +475,7 @@ export function injectIntoDevTools(devToolsConfig: DevToolsConfig): boolean {
 
   return injectInternals({
     ...devToolsConfig,
+    findHostNodesForHotUpdate: __DEV__ ? findHostNodesForHotUpdate : null,
     scheduleHotUpdate: __DEV__ ? scheduleHotUpdate : null,
     overrideHookState,
     overrideProps,

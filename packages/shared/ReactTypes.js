@@ -90,7 +90,6 @@ export type ReactEventResponder = {
   rootEventTypes?: Array<ReactEventResponderEventType>,
   createInitialState?: (props: null | Object) => Object,
   allowMultipleHostChildren: boolean,
-  stopLocalPropagation: boolean,
   onEvent?: (
     event: ReactResponderEvent,
     context: ReactResponderContext,
@@ -150,19 +149,35 @@ export type ReactEventTarget = {|
 
 type AnyNativeEvent = Event | KeyboardEvent | MouseEvent | Touch;
 
+export type PointerType =
+  | ''
+  | 'mouse'
+  | 'keyboard'
+  | 'pen'
+  | 'touch'
+  | 'trackpad';
+
 export type ReactResponderEvent = {
   nativeEvent: AnyNativeEvent,
-  target: Element | Document,
-  type: string,
   passive: boolean,
   passiveSupported: boolean,
+  pointerId: null | number,
+  pointerType: PointerType,
+  target: Element | Document,
+  type: string,
 };
+
+export opaque type EventPriority = 0 | 1 | 2;
+
+export const DiscreteEvent: EventPriority = 0;
+export const UserBlockingEvent: EventPriority = 1;
+export const ContinuousEvent: EventPriority = 2;
 
 export type ReactResponderContext = {
   dispatchEvent: (
     eventObject: Object,
     listener: (Object) => void,
-    discrete: boolean,
+    eventPriority: EventPriority,
   ) => void,
   isTargetWithinElement: (
     childTarget: Element | Document,
@@ -170,7 +185,7 @@ export type ReactResponderContext = {
   ) => boolean,
   isTargetWithinEventComponent: (Element | Document) => boolean,
   isTargetWithinEventResponderScope: (Element | Document) => boolean,
-  isPositionWithinTouchHitTarget: (x: number, y: number) => boolean,
+  isEventWithinTouchHitTarget: (event: ReactResponderEvent) => boolean,
   addRootEventTypes: (
     rootEventTypes: Array<ReactEventResponderEventType>,
   ) => void,
@@ -178,21 +193,19 @@ export type ReactResponderContext = {
     rootEventTypes: Array<ReactEventResponderEventType>,
   ) => void,
   hasOwnership: () => boolean,
-  requestResponderOwnership: () => boolean,
   requestGlobalOwnership: () => boolean,
   releaseOwnership: () => boolean,
-  setTimeout: (func: () => void, timeout: number) => Symbol,
-  clearTimeout: (timerId: Symbol) => void,
+  setTimeout: (func: () => void, timeout: number) => number,
+  clearTimeout: (timerId: number) => void,
   getFocusableElementsInScope(): Array<HTMLElement>,
   getActiveDocument(): Document,
   objectAssign: Function,
-  getEventPointerType(
-    event: ReactResponderEvent,
-  ): '' | 'mouse' | 'keyboard' | 'pen' | 'touch',
   getEventCurrentTarget(event: ReactResponderEvent): Element,
   getTimeStamp: () => number,
   isTargetWithinHostComponent: (
     target: Element | Document,
     elementType: string,
+    deep: boolean,
   ) => boolean,
+  continueLocalPropagation(): void,
 };

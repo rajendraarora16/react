@@ -23,12 +23,13 @@ import type {
   ReactEventComponentInstance,
   ReactResponderContext,
   ReactResponderEvent,
+  EventPriority,
 } from 'shared/ReactTypes';
 import type {DOMTopLevelEventType} from 'events/TopLevelEventTypes';
 import {
   batchedEventUpdates,
   discreteUpdates,
-  flushDiscreteUpdates,
+  flushDiscreteUpdatesIfNeeded,
 } from 'events/ReactGenericBatching';
 import type {Fiber} from 'react-reconciler/src/ReactFiber';
 import warning from 'shared/warning';
@@ -41,6 +42,20 @@ import {
 } from 'react-reconciler/src/ReactFiberEvents';
 
 import {getClosestInstanceFromNode} from '../client/ReactDOMComponentTree';
+import {
+  ContinuousEvent,
+  UserBlockingEvent,
+  DiscreteEvent,
+} from 'shared/ReactTypes';
+import {enableUserBlockingEvents} from 'shared/ReactFeatureFlags';
+
+// Intentionally not named imports because Rollup would use dynamic dispatch for
+// CommonJS interop named imports.
+import * as Scheduler from 'scheduler';
+const {
+  unstable_UserBlockingPriority: UserBlockingPriority,
+  unstable_runWithPriority: runWithPriority,
+} = Scheduler;
 
 export let listenToResponderEventTypesImpl;
 
@@ -54,7 +69,7 @@ type EventObjectType = $Shape<PartialEventObject>;
 
 type EventQueue = {
   events: Array<EventObjectType>,
-  discrete: boolean,
+  eventPriority: EventPriority,
 };
 
 type PartialEventObject = {
@@ -64,17 +79,17 @@ type PartialEventObject = {
 
 type ResponderTimeout = {|
   id: TimeoutID,
-  timers: Map<Symbol, ResponderTimer>,
+  timers: Map<number, ResponderTimer>,
 |};
 
 type ResponderTimer = {|
   instance: ReactEventComponentInstance,
   func: () => void,
-  id: Symbol,
+  id: number,
   timeStamp: number,
 |};
 
-const activeTimeouts: Map<Symbol, ResponderTimeout> = new Map();
+const activeTimeouts: Map<number, ResponderTimeout> = new Map();
 const rootEventTypesToEventComponentInstances: Map<
   DOMTopLevelEventType | string,
   Set<ReactEventComponentInstance>,
@@ -92,22 +107,20 @@ const eventListeners:
       ($Shape<PartialEventObject>) => void,
     > = new PossiblyWeakMap();
 
-const responderOwners: Map<
-  ReactEventResponder,
-  ReactEventComponentInstance,
-> = new Map();
 let globalOwner = null;
+let continueLocalPropagation = false;
 
 let currentTimeStamp = 0;
 let currentTimers = new Map();
 let currentInstance: null | ReactEventComponentInstance = null;
 let currentEventQueue: null | EventQueue = null;
+let currentTimerIDCounter = 0;
 
 const eventResponderContext: ReactResponderContext = {
   dispatchEvent(
     possibleEventObject: Object,
     listener: ($Shape<PartialEventObject>) => void,
-    discrete: boolean,
+    eventPriority: EventPriority,
   ): void {
     validateResponderContext();
     const {target, type, timeStamp} = possibleEventObject;
@@ -169,21 +182,19 @@ const eventResponderContext: ReactResponderContext = {
       PartialEventObject,
     >);
     const eventQueue = ((currentEventQueue: any): EventQueue);
-    if (discrete) {
-      eventQueue.discrete = true;
-    }
+    eventQueue.eventPriority = eventPriority;
     eventListeners.set(eventObject, listener);
     eventQueue.events.push(eventObject);
   },
-  isPositionWithinTouchHitTarget(x: number, y: number): boolean {
+  isEventWithinTouchHitTarget(event: ReactResponderEvent): boolean {
     validateResponderContext();
-    const doc = getActiveDocument();
-    // This isn't available in some environments (JSDOM)
-    if (typeof doc.elementFromPoint !== 'function') {
-      return false;
-    }
-    const target = doc.elementFromPoint(x, y);
-    if (target === null) {
+    const target = event.target;
+    const nativeEvent = event.nativeEvent;
+    // We should always be dealing with a mouse event or touch event here.
+    // If we are not, these won't exist and we can early return.
+    const x = (nativeEvent: any).clientX;
+    const y = (nativeEvent: any).clientY;
+    if (x === undefined || y === undefined) {
       return false;
     }
     const childFiber = getClosestInstanceFromNode(target);
@@ -294,12 +305,7 @@ const eventResponderContext: ReactResponderContext = {
   },
   hasOwnership(): boolean {
     validateResponderContext();
-    const responder = ((currentInstance: any): ReactEventComponentInstance)
-      .responder;
-    return (
-      globalOwner === currentInstance ||
-      responderOwners.get(responder) === currentInstance
-    );
+    return globalOwner === currentInstance;
   },
   requestGlobalOwnership(): boolean {
     validateResponderContext();
@@ -307,18 +313,7 @@ const eventResponderContext: ReactResponderContext = {
       return false;
     }
     globalOwner = currentInstance;
-    triggerOwnershipListeners(null);
-    return true;
-  },
-  requestResponderOwnership(): boolean {
-    validateResponderContext();
-    const eventComponentInstance = ((currentInstance: any): ReactEventComponentInstance);
-    const responder = eventComponentInstance.responder;
-    if (responderOwners.has(responder)) {
-      return false;
-    }
-    responderOwners.set(responder, eventComponentInstance);
-    triggerOwnershipListeners(responder);
+    triggerOwnershipListeners();
     return true;
   },
   releaseOwnership(): boolean {
@@ -327,14 +322,14 @@ const eventResponderContext: ReactResponderContext = {
       ((currentInstance: any): ReactEventComponentInstance),
     );
   },
-  setTimeout(func: () => void, delay): Symbol {
+  setTimeout(func: () => void, delay): number {
     validateResponderContext();
     if (currentTimers === null) {
       currentTimers = new Map();
     }
     let timeout = currentTimers.get(delay);
 
-    const timerId = Symbol();
+    const timerId = currentTimerIDCounter++;
     if (timeout === undefined) {
       const timers = new Map();
       const id = setTimeout(() => {
@@ -355,7 +350,7 @@ const eventResponderContext: ReactResponderContext = {
     activeTimeouts.set(timerId, timeout);
     return timerId;
   },
-  clearTimeout(timerId: Symbol): void {
+  clearTimeout(timerId: number): void {
     validateResponderContext();
     const timeout = activeTimeouts.get(timerId);
 
@@ -380,26 +375,6 @@ const eventResponderContext: ReactResponderContext = {
   },
   getActiveDocument,
   objectAssign: Object.assign,
-  getEventPointerType(
-    event: ReactResponderEvent,
-  ): '' | 'mouse' | 'keyboard' | 'pen' | 'touch' {
-    validateResponderContext();
-    const nativeEvent: any = event.nativeEvent;
-    const {type, pointerType} = nativeEvent;
-    if (pointerType != null) {
-      return pointerType;
-    }
-    if (type.indexOf('mouse') === 0) {
-      return 'mouse';
-    }
-    if (type.indexOf('touch') === 0) {
-      return 'touch';
-    }
-    if (type.indexOf('key') === 0) {
-      return 'keyboard';
-    }
-    return '';
-  },
   getEventCurrentTarget(event: ReactResponderEvent): Element {
     validateResponderContext();
     const target = event.target;
@@ -424,11 +399,12 @@ const eventResponderContext: ReactResponderContext = {
   isTargetWithinHostComponent(
     target: Element | Document,
     elementType: string,
+    deep: boolean,
   ): boolean {
     validateResponderContext();
     let fiber = getClosestInstanceFromNode(target);
     while (fiber !== null) {
-      if (fiber.stateNode === currentInstance) {
+      if (!deep && fiber.stateNode === currentInstance) {
         return false;
       }
       if (fiber.tag === HostComponent && fiber.type === elementType) {
@@ -437,6 +413,10 @@ const eventResponderContext: ReactResponderContext = {
       fiber = fiber.return;
     }
     return false;
+  },
+  continueLocalPropagation() {
+    validateResponderContext();
+    continueLocalPropagation = true;
   },
 };
 
@@ -490,22 +470,12 @@ function getActiveDocument(): Document {
 function releaseOwnershipForEventComponentInstance(
   eventComponentInstance: ReactEventComponentInstance,
 ): boolean {
-  const responder = eventComponentInstance.responder;
-  let triggerOwnershipListenersWith;
-  if (responderOwners.get(responder) === eventComponentInstance) {
-    responderOwners.delete(responder);
-    triggerOwnershipListenersWith = responder;
-  }
   if (globalOwner === eventComponentInstance) {
     globalOwner = null;
-    triggerOwnershipListenersWith = null;
-  }
-  if (triggerOwnershipListenersWith !== undefined) {
-    triggerOwnershipListeners(triggerOwnershipListenersWith);
+    triggerOwnershipListeners();
     return true;
-  } else {
-    return false;
   }
+  return false;
 }
 
 function isFiberHostComponentFocusable(fiber: Fiber): boolean {
@@ -536,7 +506,7 @@ function isFiberHostComponentFocusable(fiber: Fiber): boolean {
 }
 
 function processTimers(
-  timers: Map<Symbol, ResponderTimer>,
+  timers: Map<number, ResponderTimer>,
   delay: number,
 ): void {
   const timersArr = Array.from(timers.values());
@@ -568,12 +538,29 @@ function createResponderEvent(
   passive: boolean,
   passiveSupported: boolean,
 ): ReactResponderEvent {
+  const {pointerType} = (nativeEvent: any);
+  let eventPointerType = '';
+  let pointerId = null;
+
+  if (pointerType !== undefined) {
+    eventPointerType = pointerType;
+    pointerId = (nativeEvent: any).pointerId;
+  } else if (nativeEvent.key !== undefined) {
+    eventPointerType = 'keyboard';
+  } else if (nativeEvent.button !== undefined) {
+    eventPointerType = 'mouse';
+  } else if ((nativeEvent: any).changedTouches !== undefined) {
+    eventPointerType = 'touch';
+  }
+
   const responderEvent = {
     nativeEvent: nativeEvent,
-    target: nativeEventTarget,
-    type: topLevelType,
     passive,
     passiveSupported,
+    pointerId,
+    pointerType: eventPointerType,
+    target: nativeEventTarget,
+    type: topLevelType,
   };
   if (__DEV__) {
     Object.freeze(responderEvent);
@@ -584,7 +571,7 @@ function createResponderEvent(
 function createEventQueue(): EventQueue {
   return {
     events: [],
-    discrete: false,
+    eventPriority: ContinuousEvent,
   };
 }
 
@@ -603,20 +590,35 @@ function processEvents(events: Array<EventObjectType>): void {
 }
 
 export function processEventQueue(): void {
-  const {events, discrete} = ((currentEventQueue: any): EventQueue);
+  const {events, eventPriority} = ((currentEventQueue: any): EventQueue);
 
   if (events.length === 0) {
     return;
   }
-  if (discrete) {
-    if (shouldflushDiscreteUpdates(currentTimeStamp)) {
-      flushDiscreteUpdates();
+
+  switch (eventPriority) {
+    case DiscreteEvent: {
+      flushDiscreteUpdatesIfNeeded(currentTimeStamp);
+      discreteUpdates(() => {
+        batchedEventUpdates(processEvents, events);
+      });
+      break;
     }
-    discreteUpdates(() => {
+    case UserBlockingEvent: {
+      if (enableUserBlockingEvents) {
+        runWithPriority(
+          UserBlockingPriority,
+          batchedEventUpdates.bind(null, processEvents, events),
+        );
+      } else {
+        batchedEventUpdates(processEvents, events);
+      }
+      break;
+    }
+    case ContinuousEvent: {
       batchedEventUpdates(processEvents, events);
-    });
-  } else {
-    batchedEventUpdates(processEvents, events);
+      break;
+    }
   }
 }
 
@@ -698,10 +700,10 @@ function getRootEventResponderInstances(
 
 function shouldSkipEventComponent(
   eventResponderInstance: ReactEventComponentInstance,
+  responder: ReactEventResponder,
   propagatedEventResponders: null | Set<ReactEventResponder>,
 ): boolean {
-  const responder = eventResponderInstance.responder;
-  if (propagatedEventResponders !== null && responder.stopLocalPropagation) {
+  if (propagatedEventResponders !== null) {
     if (propagatedEventResponders.has(responder)) {
       return true;
     }
@@ -710,13 +712,17 @@ function shouldSkipEventComponent(
   if (globalOwner && globalOwner !== eventResponderInstance) {
     return true;
   }
-  if (
-    responderOwners.has(responder) &&
-    responderOwners.get(responder) !== eventResponderInstance
-  ) {
-    return true;
-  }
   return false;
+}
+
+function checkForLocalPropagationContinuation(
+  responder: ReactEventResponder,
+  propagatedEventResponders: Set<ReactEventResponder>,
+) {
+  if (continueLocalPropagation === true) {
+    propagatedEventResponders.delete(responder);
+    continueLocalPropagation = false;
+  }
 }
 
 function traverseAndHandleEventResponderInstances(
@@ -768,6 +774,7 @@ function traverseAndHandleEventResponderInstances(
         if (
           shouldSkipEventComponent(
             targetEventResponderInstance,
+            responder,
             propagatedEventResponders,
           )
         ) {
@@ -775,6 +782,10 @@ function traverseAndHandleEventResponderInstances(
         }
         currentInstance = targetEventResponderInstance;
         eventListener(responderEvent, eventResponderContext, props, state);
+        checkForLocalPropagationContinuation(
+          responder,
+          propagatedEventResponders,
+        );
       }
     }
     // We clean propagated event responders between phases.
@@ -788,6 +799,7 @@ function traverseAndHandleEventResponderInstances(
         if (
           shouldSkipEventComponent(
             targetEventResponderInstance,
+            responder,
             propagatedEventResponders,
           )
         ) {
@@ -795,6 +807,10 @@ function traverseAndHandleEventResponderInstances(
         }
         currentInstance = targetEventResponderInstance;
         eventListener(responderEvent, eventResponderContext, props, state);
+        checkForLocalPropagationContinuation(
+          responder,
+          propagatedEventResponders,
+        );
       }
     }
   }
@@ -809,7 +825,9 @@ function traverseAndHandleEventResponderInstances(
       const {responder, props, state} = rootEventResponderInstance;
       const eventListener = responder.onRootEvent;
       if (eventListener !== undefined) {
-        if (shouldSkipEventComponent(rootEventResponderInstance, null)) {
+        if (
+          shouldSkipEventComponent(rootEventResponderInstance, responder, null)
+        ) {
           continue;
         }
         currentInstance = rootEventResponderInstance;
@@ -819,18 +837,13 @@ function traverseAndHandleEventResponderInstances(
   }
 }
 
-function triggerOwnershipListeners(
-  limitByResponder: null | ReactEventResponder,
-): void {
+function triggerOwnershipListeners(): void {
   const listeningInstances = Array.from(ownershipChangeListeners);
   const previousInstance = currentInstance;
   try {
     for (let i = 0; i < listeningInstances.length; i++) {
       const instance = listeningInstances[i];
       const {props, responder, state} = instance;
-      if (limitByResponder !== null && limitByResponder !== responder) {
-        continue;
-      }
       currentInstance = instance;
       const onOwnershipChange = responder.onOwnershipChange;
       if (onOwnershipChange !== undefined) {
@@ -1014,26 +1027,4 @@ export function generateListeningKey(
   // properties again.
   const passiveKey = passive ? '_passive' : '_active';
   return `${topLevelType}${passiveKey}`;
-}
-
-let lastDiscreteEventTimeStamp = 0;
-
-export function shouldflushDiscreteUpdates(timeStamp: number): boolean {
-  // event.timeStamp isn't overly reliable due to inconsistencies in
-  // how different browsers have historically provided the time stamp.
-  // Some browsers provide high-resolution time stamps for all events,
-  // some provide low-resoltion time stamps for all events. FF < 52
-  // even mixes both time stamps together. Some browsers even report
-  // negative time stamps or time stamps that are 0 (iOS9) in some cases.
-  // Given we are only comparing two time stamps with equality (!==),
-  // we are safe from the resolution differences. If the time stamp is 0
-  // we bail-out of preventing the flush, which can affect semantics,
-  // such as if an earlier flush removes or adds event listeners that
-  // are fired in the subsequent flush. However, this is the same
-  // behaviour as we had before this change, so the risks are low.
-  if (timeStamp === 0 || lastDiscreteEventTimeStamp !== timeStamp) {
-    lastDiscreteEventTimeStamp = timeStamp;
-    return true;
-  }
-  return false;
 }

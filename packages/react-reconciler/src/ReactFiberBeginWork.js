@@ -54,6 +54,7 @@ import {
   debugRenderPhaseSideEffects,
   debugRenderPhaseSideEffectsForStrictMode,
   enableProfilerTimer,
+  enableSchedulerTracing,
   enableSuspenseServerRenderer,
   enableEventAPI,
 } from 'shared/ReactFeatureFlags';
@@ -71,7 +72,11 @@ import {
   getCurrentFiberStackInDev,
 } from './ReactCurrentFiber';
 import {startWorkTimer, cancelWorkTimer} from './ReactDebugFiberPerf';
-import {resolveFunctionForHotReloading} from './ReactFiberHotReloading';
+import {
+  resolveFunctionForHotReloading,
+  resolveForwardRefForHotReloading,
+  resolveClassForHotReloading,
+} from './ReactFiberHotReloading';
 
 import {
   mountChildFibers,
@@ -160,7 +165,11 @@ import {
   createWorkInProgress,
   isSimpleFunctionComponent,
 } from './ReactFiber';
-import {requestCurrentTime, retryTimedOutBoundary} from './ReactFiberWorkLoop';
+import {
+  markDidDeprioritizeIdleSubtree,
+  requestCurrentTime,
+  retryTimedOutBoundary,
+} from './ReactFiberWorkLoop';
 
 const ReactCurrentOwner = ReactSharedInternals.ReactCurrentOwner;
 
@@ -984,6 +993,9 @@ function updateHostComponent(current, workInProgress, renderExpirationTime) {
     renderExpirationTime !== Never &&
     shouldDeprioritizeSubtree(type, nextProps)
   ) {
+    if (enableSchedulerTracing) {
+      markDidDeprioritizeIdleSubtree();
+    }
     // Schedule this fiber to re-render at offscreen priority. Then bailout.
     workInProgress.expirationTime = workInProgress.childExpirationTime = Never;
     return null;
@@ -1054,6 +1066,11 @@ function mountLazyComponent(
       break;
     }
     case ClassComponent: {
+      if (__DEV__) {
+        workInProgress.type = Component = resolveClassForHotReloading(
+          Component,
+        );
+      }
       child = updateClassComponent(
         null,
         workInProgress,
@@ -1065,7 +1082,7 @@ function mountLazyComponent(
     }
     case ForwardRef: {
       if (__DEV__) {
-        workInProgress.type = Component = resolveFunctionForHotReloading(
+        workInProgress.type = Component = resolveForwardRefForHotReloading(
           Component,
         );
       }
@@ -1413,6 +1430,9 @@ function validateFunctionComponentInDev(workInProgress: Fiber, Component: any) {
   }
 }
 
+// TODO: This is now an empty object. Should we just make it a boolean?
+const SUSPENDED_MARKER: SuspenseState = ({}: any);
+
 function updateSuspenseComponent(
   current,
   workInProgress,
@@ -1440,17 +1460,9 @@ function updateSuspenseComponent(
       (ForceSuspenseFallback: SuspenseContext),
     )
   ) {
-    // This either already captured or is a new mount that was forced into its fallback
-    // state by a parent.
-    const attemptedState: SuspenseState | null = workInProgress.memoizedState;
     // Something in this boundary's subtree already suspended. Switch to
     // rendering the fallback children.
-    nextState = {
-      fallbackExpirationTime:
-        attemptedState !== null
-          ? attemptedState.fallbackExpirationTime
-          : NoWork,
-    };
+    nextState = SUSPENDED_MARKER;
     nextDidTimeout = true;
     workInProgress.effectTag &= ~DidCapture;
   } else {
@@ -2261,6 +2273,9 @@ function beginWork(
             renderExpirationTime !== Never &&
             shouldDeprioritizeSubtree(workInProgress.type, newProps)
           ) {
+            if (enableSchedulerTracing) {
+              markDidDeprioritizeIdleSubtree();
+            }
             // Schedule this fiber to re-render at offscreen priority. Then bailout.
             workInProgress.expirationTime = workInProgress.childExpirationTime = Never;
             return null;
