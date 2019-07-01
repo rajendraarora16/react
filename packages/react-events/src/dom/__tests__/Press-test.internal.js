@@ -36,6 +36,12 @@ function createTouchEvent(type, id, data) {
         identifier: id,
       },
     ],
+    targetTouches: [
+      {
+        ...data,
+        identifier: id,
+      },
+    ],
   });
 }
 
@@ -49,10 +55,10 @@ const createKeyboardEvent = (type, data) => {
 
 function init() {
   ReactFeatureFlags = require('shared/ReactFeatureFlags');
-  ReactFeatureFlags.enableEventAPI = true;
+  ReactFeatureFlags.enableFlareAPI = true;
   React = require('react');
   ReactDOM = require('react-dom');
-  Press = require('react-events/press');
+  Press = require('react-events/press').Press;
   Scheduler = require('scheduler');
 }
 
@@ -335,6 +341,8 @@ describe('Event responder: Press', () => {
 
     it('is called after "keyup" event for Enter', () => {
       ref.current.dispatchEvent(createKeyboardEvent('keydown', {key: 'Enter'}));
+      // click occurs before keyup
+      ref.current.dispatchEvent(createKeyboardEvent('click'));
       ref.current.dispatchEvent(createKeyboardEvent('keyup', {key: 'Enter'}));
       expect(onPressEnd).toHaveBeenCalledTimes(1);
       expect(onPressEnd).toHaveBeenCalledWith(
@@ -616,14 +624,24 @@ describe('Event responder: Press', () => {
       ref.current.dispatchEvent(
         createTouchEvent('touchstart', 0, {
           target: ref.current,
+          clientX: 0,
+          clientY: 0,
         }),
       );
       ref.current.dispatchEvent(
         createTouchEvent('touchend', 0, {
           target: ref.current,
+          clientX: 0,
+          clientY: 0,
         }),
       );
-      ref.current.dispatchEvent(createEvent('pointerup', {pointerType: 'pen'}));
+      ref.current.dispatchEvent(
+        createEvent('pointerup', {
+          pointerType: 'pen',
+          clientX: 0,
+          clientY: 0,
+        }),
+      );
       expect(onPress).toHaveBeenCalledTimes(1);
       expect(onPress).toHaveBeenCalledWith(
         expect.objectContaining({pointerType: 'pen', type: 'press'}),
@@ -989,8 +1007,8 @@ describe('Event responder: Press', () => {
       height: 100,
       top: 50,
       left: 50,
-      right: 500,
-      bottom: 500,
+      right: 150,
+      bottom: 150,
     };
     const pressRectOffset = 20;
     const getBoundingClientRectMock = () => rectMock;
@@ -1043,6 +1061,55 @@ describe('Event responder: Press', () => {
           'onPressStart',
           'onPressChange',
           'onPressMove',
+          'onPressEnd',
+          'onPressChange',
+          'onPress',
+        ]);
+      });
+
+      it('no delay and "onPress*" events are correctly called with target change', () => {
+        let events = [];
+        const outerRef = React.createRef();
+        const innerRef = React.createRef();
+        const createEventHandler = msg => () => {
+          events.push(msg);
+        };
+
+        const element = (
+          <div ref={outerRef}>
+            <Press
+              onPress={createEventHandler('onPress')}
+              onPressChange={createEventHandler('onPressChange')}
+              onPressMove={createEventHandler('onPressMove')}
+              onPressStart={createEventHandler('onPressStart')}
+              onPressEnd={createEventHandler('onPressEnd')}>
+              <div ref={innerRef} />
+            </Press>
+          </div>
+        );
+
+        ReactDOM.render(element, container);
+
+        innerRef.current.getBoundingClientRect = getBoundingClientRectMock;
+        innerRef.current.dispatchEvent(createEvent('pointerdown'));
+        outerRef.current.dispatchEvent(
+          createEvent('pointermove', coordinatesOutside),
+        );
+        innerRef.current.dispatchEvent(
+          createEvent('pointermove', coordinatesInside),
+        );
+        innerRef.current.dispatchEvent(
+          createEvent('pointerup', coordinatesInside),
+        );
+        jest.runAllTimers();
+
+        expect(events).toEqual([
+          'onPressStart',
+          'onPressChange',
+          'onPressEnd',
+          'onPressChange',
+          'onPressStart',
+          'onPressChange',
           'onPressEnd',
           'onPressChange',
           'onPress',
@@ -1513,8 +1580,8 @@ describe('Event responder: Press', () => {
       height: 100,
       top: 50,
       left: 50,
-      right: 500,
-      bottom: 500,
+      right: 150,
+      bottom: 150,
     };
     const pressRectOffset = 20;
     const getBoundingClientRectMock = () => rectMock;
@@ -1720,8 +1787,8 @@ describe('Event responder: Press', () => {
           height: 80,
           top: 60,
           left: 60,
-          right: 490,
-          bottom: 490,
+          right: 140,
+          bottom: 140,
         });
         const coordinates = {
           clientX: rectMock.left,
@@ -1774,8 +1841,8 @@ describe('Event responder: Press', () => {
           height: 200,
           top: 0,
           left: 0,
-          right: 550,
-          bottom: 550,
+          right: 200,
+          bottom: 200,
         });
         const coordinates = {
           clientX: rectMock.left - 50,
@@ -1842,16 +1909,16 @@ describe('Event responder: Press', () => {
           }),
         );
         document.elementFromPoint = () => container;
-        ref.current.dispatchEvent(
+        container.dispatchEvent(
           createTouchEvent('touchmove', 0, {
             ...coordinatesOutside,
-            target: ref.current,
+            target: container,
           }),
         );
-        ref.current.dispatchEvent(
+        container.dispatchEvent(
           createTouchEvent('touchend', 0, {
             ...coordinatesOutside,
-            target: ref.current,
+            target: container,
           }),
         );
         jest.runAllTimers();
@@ -1911,10 +1978,10 @@ describe('Event responder: Press', () => {
         jest.runAllTimers();
         expect(events).toEqual(['onPressMove']);
         events = [];
-        ref.current.dispatchEvent(
+        container.dispatchEvent(
           createTouchEvent('touchend', 0, {
             ...coordinatesOutside,
-            target: ref.current,
+            target: container,
           }),
         );
         jest.runAllTimers();
@@ -1956,10 +2023,10 @@ describe('Event responder: Press', () => {
         }),
       );
       document.elementFromPoint = () => container;
-      ref.current.dispatchEvent(
+      container.dispatchEvent(
         createTouchEvent('touchmove', 0, {
           ...coordinatesOutside,
-          target: ref.current,
+          target: container,
         }),
       );
       ref.current.dispatchEvent(
@@ -1971,6 +2038,7 @@ describe('Event responder: Press', () => {
       document.elementFromPoint = () => ref.current;
       ref.current.dispatchEvent(
         createTouchEvent('touchend', 0, {
+          ...coordinatesInside,
           target: ref.current,
         }),
       );
@@ -2017,8 +2085,8 @@ describe('Event responder: Press', () => {
       ref.current.getBoundingClientRect = () => ({
         top: 0,
         left: 0,
-        bottom: 0,
-        right: 0,
+        bottom: 100,
+        right: 100,
       });
 
       // 1
@@ -2101,8 +2169,8 @@ describe('Event responder: Press', () => {
       ref.current.getBoundingClientRect = () => ({
         top: 0,
         left: 0,
-        bottom: 0,
-        right: 0,
+        bottom: 100,
+        right: 100,
       });
 
       ref.current.dispatchEvent(createEvent('pointerdown'));
@@ -2135,8 +2203,8 @@ describe('Event responder: Press', () => {
         ref.current.getBoundingClientRect = () => ({
           top: 0,
           left: 0,
-          bottom: 0,
-          right: 0,
+          bottom: 100,
+          right: 100,
         });
 
         ref.current.dispatchEvent(createEvent('pointerdown'));
@@ -2218,9 +2286,17 @@ describe('Event responder: Press', () => {
       ReactDOM.render(element, container);
 
       ref.current.dispatchEvent(createEvent('pointerdown'));
-      ref.current.dispatchEvent(createEvent('pointerup'));
+      ref.current.dispatchEvent(
+        createEvent('pointerup', {
+          clientX: 0,
+          clientY: 0,
+        }),
+      );
       ref.current.dispatchEvent(createEvent('click', {preventDefault}));
       expect(preventDefault).toBeCalled();
+      expect(onPress).toHaveBeenCalledWith(
+        expect.objectContaining({defaultPrevented: true}),
+      );
     });
 
     it('deeply prevents native behaviour by default', () => {
@@ -2237,7 +2313,12 @@ describe('Event responder: Press', () => {
       ReactDOM.render(element, container);
 
       buttonRef.current.dispatchEvent(createEvent('pointerdown'));
-      buttonRef.current.dispatchEvent(createEvent('pointerup'));
+      buttonRef.current.dispatchEvent(
+        createEvent('pointerup', {
+          clientX: 0,
+          clientY: 0,
+        }),
+      );
       buttonRef.current.dispatchEvent(createEvent('click', {preventDefault}));
       expect(preventDefault).toBeCalled();
     });
@@ -2256,9 +2337,17 @@ describe('Event responder: Press', () => {
       ReactDOM.render(element, container);
 
       ref.current.dispatchEvent(createEvent('pointerdown'));
-      ref.current.dispatchEvent(createEvent('pointerup'));
+      ref.current.dispatchEvent(
+        createEvent('pointerup', {
+          clientX: 0,
+          clientY: 0,
+        }),
+      );
       ref.current.dispatchEvent(createEvent('click', {preventDefault}));
       expect(preventDefault).toBeCalled();
+      expect(onPress).toHaveBeenCalledWith(
+        expect.objectContaining({defaultPrevented: true}),
+      );
     });
 
     it('uses native behaviour for interactions with modifier keys', () => {
@@ -2277,12 +2366,19 @@ describe('Event responder: Press', () => {
           createEvent('pointerdown', {[modifierKey]: true}),
         );
         ref.current.dispatchEvent(
-          createEvent('pointerup', {[modifierKey]: true}),
+          createEvent('pointerup', {
+            [modifierKey]: true,
+            clientX: 0,
+            clientY: 0,
+          }),
         );
         ref.current.dispatchEvent(
           createEvent('click', {[modifierKey]: true, preventDefault}),
         );
         expect(preventDefault).not.toBeCalled();
+        expect(onPress).toHaveBeenCalledWith(
+          expect.objectContaining({defaultPrevented: false}),
+        );
       });
     });
 
@@ -2298,9 +2394,42 @@ describe('Event responder: Press', () => {
       ReactDOM.render(element, container);
 
       ref.current.dispatchEvent(createEvent('pointerdown'));
-      ref.current.dispatchEvent(createEvent('pointerup'));
+      ref.current.dispatchEvent(
+        createEvent('pointerup', {
+          clientX: 0,
+          clientY: 0,
+        }),
+      );
       ref.current.dispatchEvent(createEvent('click', {preventDefault}));
       expect(preventDefault).not.toBeCalled();
+      expect(onPress).toHaveBeenCalledWith(
+        expect.objectContaining({defaultPrevented: false}),
+      );
+    });
+
+    it('warns when preventDefault is used in an event hook', () => {
+      const onPress = jest.fn();
+      const preventDefault = jest.fn();
+      const ref = React.createRef();
+      const Component = () => {
+        React.unstable_useEvent(Press, {preventDefault: false});
+
+        return (
+          <Press onPress={onPress}>
+            <a href="#" ref={ref} />
+          </Press>
+        );
+      };
+      ReactDOM.render(<Component />, container);
+
+      expect(() => {
+        ref.current.dispatchEvent(createEvent('pointerdown'));
+        ref.current.dispatchEvent(createEvent('pointerup'));
+        ref.current.dispatchEvent(createEvent('click', {preventDefault}));
+      }).toWarnDev(
+        '"preventDefault" prop cannot be passed to Press event hooks. This will result in a no-op.',
+        {withoutStack: true},
+      );
     });
   });
 
@@ -2370,8 +2499,62 @@ describe('Event responder: Press', () => {
     });
   });
 
+  it('does end on "scroll" to document', () => {
+    const onPressEnd = jest.fn();
+    const ref = React.createRef();
+    const element = (
+      <div>
+        <Press onPressEnd={onPressEnd}>
+          <a href="#" ref={ref} />
+        </Press>
+      </div>
+    );
+    ReactDOM.render(element, container);
+
+    ref.current.dispatchEvent(createEvent('pointerdown'));
+    document.dispatchEvent(createEvent('scroll'));
+    expect(onPressEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('does end on "scroll" to a parent container', () => {
+    const onPressEnd = jest.fn();
+    const ref = React.createRef();
+    const containerRef = React.createRef();
+    const element = (
+      <div ref={containerRef}>
+        <Press onPressEnd={onPressEnd}>
+          <a href="#" ref={ref} />
+        </Press>
+      </div>
+    );
+    ReactDOM.render(element, container);
+
+    ref.current.dispatchEvent(createEvent('pointerdown'));
+    containerRef.current.dispatchEvent(createEvent('scroll'));
+    expect(onPressEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not end on "scroll" to an element outside', () => {
+    const onPressEnd = jest.fn();
+    const ref = React.createRef();
+    const outsideRef = React.createRef();
+    const element = (
+      <div>
+        <Press onPressEnd={onPressEnd}>
+          <a href="#" ref={ref} />
+        </Press>
+        <span ref={outsideRef} />
+      </div>
+    );
+    ReactDOM.render(element, container);
+
+    ref.current.dispatchEvent(createEvent('pointerdown'));
+    outsideRef.current.dispatchEvent(createEvent('scroll'));
+    expect(onPressEnd).not.toBeCalled();
+  });
+
   it('expect displayName to show up for event component', () => {
-    expect(Press.displayName).toBe('Press');
+    expect(Press.responder.displayName).toBe('Press');
   });
 
   it('should not trigger an invariant in addRootEventTypes()', () => {
@@ -2425,8 +2608,8 @@ describe('Event responder: Press', () => {
     ref.current.getBoundingClientRect = () => ({
       top: 10,
       left: 10,
-      bottom: 20,
-      right: 20,
+      bottom: 110,
+      right: 110,
     });
 
     ref.current.dispatchEvent(
@@ -2552,7 +2735,10 @@ describe('Event responder: Press', () => {
   });
 
   function dispatchEventWithTimeStamp(elem, name, timeStamp) {
-    const event = createEvent(name);
+    const event = createEvent(name, {
+      clientX: 0,
+      clientY: 0,
+    });
     Object.defineProperty(event, 'timeStamp', {
       value: timeStamp,
     });
@@ -2590,7 +2776,7 @@ describe('Event responder: Press', () => {
     const root = ReactDOM.unstable_createRoot(newContainer);
     document.body.appendChild(newContainer);
     root.render(<MyComponent />);
-    Scheduler.flushAll();
+    Scheduler.unstable_flushAll();
 
     dispatchEventWithTimeStamp(ref.current, 'pointerdown', 100);
     dispatchEventWithTimeStamp(ref.current, 'pointerup', 100);
@@ -2601,7 +2787,7 @@ describe('Event responder: Press', () => {
     } else {
       expect(renderCounts).toBe(1);
     }
-    Scheduler.flushAll();
+    Scheduler.unstable_flushAll();
     if (__DEV__) {
       expect(renderCounts).toBe(4);
     } else {
@@ -2619,7 +2805,7 @@ describe('Event responder: Press', () => {
       expect(renderCounts).toBe(3);
     }
 
-    Scheduler.flushAll();
+    Scheduler.unstable_flushAll();
     document.body.removeChild(newContainer);
   });
 
@@ -2656,7 +2842,7 @@ describe('Event responder: Press', () => {
     const root = ReactDOM.unstable_createRoot(newContainer);
     document.body.appendChild(newContainer);
     root.render(<MyComponent />);
-    Scheduler.flushAll();
+    Scheduler.unstable_flushAll();
 
     dispatchEventWithTimeStamp(ref.current, 'pointerdown', 100);
     dispatchEventWithTimeStamp(ref.current, 'pointerup', 100);
@@ -2667,7 +2853,7 @@ describe('Event responder: Press', () => {
     } else {
       expect(renderCounts).toBe(2);
     }
-    Scheduler.flushAll();
+    Scheduler.unstable_flushAll();
     if (__DEV__) {
       expect(renderCounts).toBe(6);
     } else {
@@ -2685,7 +2871,7 @@ describe('Event responder: Press', () => {
       expect(renderCounts).toBe(4);
     }
 
-    Scheduler.flushAll();
+    Scheduler.unstable_flushAll();
     document.body.removeChild(newContainer);
   });
 
@@ -2731,13 +2917,13 @@ describe('Event responder: Press', () => {
       const root = ReactDOM.unstable_createRoot(newContainer);
 
       root.render(<MyComponent />);
-      Scheduler.flushAll();
+      Scheduler.unstable_flushAll();
       expect(newContainer.textContent).toEqual('Presses: 0, Clicks: 0');
 
       dispatchEventWithTimeStamp(button.current, 'pointerdown', 100);
       dispatchEventWithTimeStamp(button.current, 'pointerup', 100);
       dispatchEventWithTimeStamp(button.current, 'click', 100);
-      Scheduler.flushAll();
+      Scheduler.unstable_flushAll();
       expect(newContainer.textContent).toEqual('Presses: 1, Clicks: 1');
 
       expect(ops).toEqual(['Presses: 0, Clicks: 0']);
@@ -2838,6 +3024,49 @@ describe('Event responder: Press', () => {
       ref.current.dispatchEvent(createEvent('contextmenu'));
       expect(onContextMenu).toHaveBeenCalledTimes(0);
     });
+
+    it('is still called if "preventContextMenu" is true', () => {
+      const onContextMenu = jest.fn();
+      const ref = React.createRef();
+      const element = (
+        <Press onContextMenu={onContextMenu} preventContextMenu={true}>
+          <div ref={ref} />
+        </Press>
+      );
+      ReactDOM.render(element, container);
+      ref.current.dispatchEvent(
+        createEvent('pointerdown', {pointerType: 'mouse', button: 2}),
+      );
+      ref.current.dispatchEvent(createEvent('contextmenu'));
+      expect(onContextMenu).toHaveBeenCalledTimes(1);
+      expect(onContextMenu).toHaveBeenCalledWith(
+        expect.objectContaining({defaultPrevented: true}),
+      );
+    });
+  });
+
+  it('warns when preventContextMenu is used in an event hook', () => {
+    const ref = React.createRef();
+    const Component = () => {
+      React.unstable_useEvent(Press, {preventContextMenu: false});
+
+      return (
+        <Press preventContextMenu={true}>
+          <div ref={ref} />
+        </Press>
+      );
+    };
+    ReactDOM.render(<Component />, container);
+
+    expect(() => {
+      ref.current.dispatchEvent(
+        createEvent('pointerdown', {pointerType: 'mouse', button: 2}),
+      );
+      ref.current.dispatchEvent(createEvent('contextmenu'));
+    }).toWarnDev(
+      '"preventContextMenu" prop cannot be passed to Press event hooks. This will result in a no-op.',
+      {withoutStack: true},
+    );
   });
 
   it('should work correctly with stopPropagation set to true', () => {
@@ -2853,6 +3082,33 @@ describe('Event responder: Press', () => {
 
     ref.current.dispatchEvent(
       createEvent('pointerdown', {pointerType: 'mouse', button: 0}),
+    );
+    container.removeEventListener('pointerdown', pointerDownEvent);
+    expect(pointerDownEvent).toHaveBeenCalledTimes(0);
+  });
+
+  it('warns when stopPropagation is used in an event hook', () => {
+    const ref = React.createRef();
+    const Component = () => {
+      React.unstable_useEvent(Press, {stopPropagation: false});
+
+      return (
+        <Press stopPropagation={true}>
+          <a href="#" ref={ref} />
+        </Press>
+      );
+    };
+    const pointerDownEvent = jest.fn();
+    container.addEventListener('pointerdown', pointerDownEvent);
+    ReactDOM.render(<Component />, container);
+
+    expect(() => {
+      ref.current.dispatchEvent(
+        createEvent('pointerdown', {pointerType: 'mouse', button: 0}),
+      );
+    }).toWarnDev(
+      '"stopPropagation" prop cannot be passed to Press event hooks. This will result in a no-op.',
+      {withoutStack: true},
     );
     container.removeEventListener('pointerdown', pointerDownEvent);
     expect(pointerDownEvent).toHaveBeenCalledTimes(0);
