@@ -9,11 +9,13 @@
 
 import type {
   ReactNativeBaseComponentViewConfig,
-  ReactNativeEventResponderEventType,
   ReactNativeResponderEvent,
   ReactNativeResponderContext,
 } from './ReactNativeTypes';
-import type {ReactEventComponentInstance} from 'shared/ReactTypes';
+import type {
+  ReactEventResponder,
+  ReactEventResponderInstance,
+} from 'shared/ReactTypes';
 
 import invariant from 'shared/invariant';
 
@@ -34,8 +36,12 @@ import ReactNativeFiberHostComponent from './ReactNativeFiberHostComponent';
 
 const {get: getViewConfigForType} = ReactNativeViewConfigRegistry;
 
-type ReactNativeEventComponentInstance = ReactEventComponentInstance<
-  ReactNativeEventResponderEventType,
+type ReactNativeEventResponderInstance = ReactEventResponderInstance<
+  ReactNativeResponderEvent,
+  ReactNativeResponderContext,
+>;
+
+type ReactNativeEventResponder = ReactEventResponder<
   ReactNativeResponderEvent,
   ReactNativeResponderContext,
 >;
@@ -216,13 +222,6 @@ export function getChildHostContext(
   }
 }
 
-export function getChildHostContextForEventComponent(
-  parentHostContext: HostContext,
-) {
-  // TODO: add getChildHostContextForEventComponent implementation
-  return parentHostContext;
-}
-
 export function getPublicInstance(instance: Instance): * {
   return instance;
 }
@@ -247,7 +246,7 @@ export function resetAfterCommit(containerInfo: Container): void {
 }
 
 export const isPrimaryRenderer = true;
-export const shouldWarnUnactedUpdates = true;
+export const warnsIfNotActing = true;
 
 export const scheduleTimeout = setTimeout;
 export const cancelTimeout = clearTimeout;
@@ -496,45 +495,42 @@ export function unhideTextInstance(
   throw new Error('Not yet implemented.');
 }
 
-export function mountEventComponent(
-  eventComponentInstance: ReactNativeEventComponentInstance,
-) {
-  throw new Error('Not yet implemented.');
-}
-
-export function updateEventComponent(
-  eventComponentInstance: ReactNativeEventComponentInstance,
-) {
-  throw new Error('Not yet implemented.');
-}
-
-export function unmountEventComponent(
-  eventComponentInstance: ReactNativeEventComponentInstance,
-): void {
-  throw new Error('Not yet implemented.');
-}
-
-export function getEventTargetChildElement(
-  type: Symbol | number,
-  props: Props,
-): null {
-  throw new Error('Not yet implemented.');
-}
-
-export function handleEventTarget(
-  type: Symbol | number,
-  props: Props,
-  rootContainerInstance: Container,
-  internalInstanceHandle: Object,
-): boolean {
-  throw new Error('Not yet implemented.');
-}
-
-export function commitEventTarget(
-  type: Symbol | number,
-  props: Props,
+export function mountResponderInstance(
+  responder: ReactNativeEventResponder,
+  responderInstance: ReactNativeEventResponderInstance,
+  props: Object,
+  state: Object,
   instance: Instance,
-  parentInstance: Instance,
+) {
+  throw new Error('Not yet implemented.');
+}
+
+export function unmountResponderInstance(
+  responderInstance: ReactNativeEventResponderInstance,
 ): void {
+  throw new Error('Not yet implemented.');
+}
+
+export function getFundamentalComponentInstance(fundamentalInstance) {
+  throw new Error('Not yet implemented.');
+}
+
+export function mountFundamentalComponent(fundamentalInstance) {
+  throw new Error('Not yet implemented.');
+}
+
+export function shouldUpdateFundamentalComponent(fundamentalInstance) {
+  throw new Error('Not yet implemented.');
+}
+
+export function updateFundamentalComponent(fundamentalInstance) {
+  throw new Error('Not yet implemented.');
+}
+
+export function unmountFundamentalComponent(fundamentalInstance) {
+  throw new Error('Not yet implemented.');
+}
+
+export function getInstanceFromNode(node) {
   throw new Error('Not yet implemented.');
 }

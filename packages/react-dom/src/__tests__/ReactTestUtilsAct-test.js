@@ -27,30 +27,126 @@ function sleep(period) {
 
 describe('ReactTestUtils.act()', () => {
   // first we run all the tests with concurrent mode
-  let concurrentRoot;
-  function renderConcurrent(el, dom) {
-    concurrentRoot = ReactDOM.unstable_createRoot(dom);
-    concurrentRoot.render(el);
+  if (__EXPERIMENTAL__) {
+    let concurrentRoot = null;
+    const renderConcurrent = (el, dom) => {
+      concurrentRoot = ReactDOM.createRoot(dom);
+      concurrentRoot.render(el);
+    };
+
+    const unmountConcurrent = _dom => {
+      if (concurrentRoot !== null) {
+        concurrentRoot.unmount();
+        concurrentRoot = null;
+      }
+    };
+
+    const rerenderConcurrent = el => {
+      concurrentRoot.render(el);
+    };
+
+    runActTests(
+      'concurrent mode',
+      renderConcurrent,
+      unmountConcurrent,
+      rerenderConcurrent,
+    );
   }
-  function unmountConcurrent(_dom) {
-    if (concurrentRoot !== null) {
-      concurrentRoot.unmount();
-      concurrentRoot = null;
-    }
-  }
-  runActTests('concurrent mode', renderConcurrent, unmountConcurrent);
 
   // and then in sync mode
+
+  let syncDom = null;
   function renderSync(el, dom) {
+    syncDom = dom;
     ReactDOM.render(el, dom);
   }
+
   function unmountSync(dom) {
+    syncDom = null;
     ReactDOM.unmountComponentAtNode(dom);
   }
-  runActTests('legacy sync mode', renderSync, unmountSync);
+
+  function rerenderSync(el) {
+    ReactDOM.render(el, syncDom);
+  }
+
+  runActTests('legacy sync mode', renderSync, unmountSync, rerenderSync);
+
+  // and then in batched mode
+  if (__EXPERIMENTAL__) {
+    let batchedRoot = null;
+    const renderBatched = (el, dom) => {
+      batchedRoot = ReactDOM.createSyncRoot(dom);
+      batchedRoot.render(el);
+    };
+
+    const unmountBatched = dom => {
+      if (batchedRoot !== null) {
+        batchedRoot.unmount();
+        batchedRoot = null;
+      }
+    };
+
+    const rerenderBatched = el => {
+      batchedRoot.render(el);
+    };
+
+    runActTests('batched mode', renderBatched, unmountBatched, rerenderBatched);
+  }
+
+  describe('unacted effects', () => {
+    function App() {
+      React.useEffect(() => {}, []);
+      return null;
+    }
+
+    it('does not warn in legacy sync mode', () => {
+      expect(() => {
+        ReactDOM.render(<App />, document.createElement('div'));
+      }).toWarnDev([]);
+    });
+
+    it('warns in strict mode', () => {
+      expect(() => {
+        ReactDOM.render(
+          <React.StrictMode>
+            <App />
+          </React.StrictMode>,
+          document.createElement('div'),
+        );
+      }).toWarnDev([
+        'An update to App ran an effect, but was not wrapped in act(...)',
+        'An update to App ran an effect, but was not wrapped in act(...)',
+      ]);
+    });
+
+    if (__EXPERIMENTAL__) {
+      it('warns in batched mode', () => {
+        expect(() => {
+          const root = ReactDOM.createSyncRoot(document.createElement('div'));
+          root.render(<App />);
+          Scheduler.unstable_flushAll();
+        }).toWarnDev([
+          'An update to App ran an effect, but was not wrapped in act(...)',
+          'An update to App ran an effect, but was not wrapped in act(...)',
+        ]);
+      });
+
+      it('warns in concurrent mode', () => {
+        expect(() => {
+          const root = ReactDOM.createRoot(document.createElement('div'));
+          root.render(<App />);
+          Scheduler.unstable_flushAll();
+        }).toWarnDev([
+          'An update to App ran an effect, but was not wrapped in act(...)',
+          'An update to App ran an effect, but was not wrapped in act(...)',
+        ]);
+      });
+    }
+  });
 });
 
-function runActTests(label, render, unmount) {
+function runActTests(label, render, unmount, rerender) {
   describe(label, () => {
     beforeEach(() => {
       jest.resetModules();
@@ -63,10 +159,12 @@ function runActTests(label, render, unmount) {
       container = document.createElement('div');
       document.body.appendChild(container);
     });
+
     afterEach(() => {
       unmount(container);
       document.body.removeChild(container);
     });
+
     describe('sync', () => {
       it('can use act to flush effects', () => {
         function App() {
@@ -173,13 +271,16 @@ function runActTests(label, render, unmount) {
           'An update to App inside a test was not wrapped in act(...).',
         ]);
       });
+
       describe('fake timers', () => {
         beforeEach(() => {
           jest.useFakeTimers();
         });
+
         afterEach(() => {
           jest.useRealTimers();
         });
+
         it('lets a ticker update', () => {
           function App() {
             let [toggle, setToggle] = React.useState(0);
@@ -201,6 +302,7 @@ function runActTests(label, render, unmount) {
 
           expect(container.innerHTML).toBe('1');
         });
+
         it('can use the async version to catch microtasks', async () => {
           function App() {
             let [toggle, setToggle] = React.useState(0);
@@ -222,6 +324,7 @@ function runActTests(label, render, unmount) {
 
           expect(container.innerHTML).toBe('1');
         });
+
         it('can handle cascading promises with fake timers', async () => {
           // this component triggers an effect, that waits a tick,
           // then sets state. repeats this 5 times.
@@ -247,6 +350,7 @@ function runActTests(label, render, unmount) {
           // all 5 ticks present and accounted for
           expect(container.innerHTML).toBe('5');
         });
+
         it('flushes immediate re-renders with act', () => {
           function App() {
             let [ctr, setCtr] = React.useState(0);
@@ -300,6 +404,7 @@ function runActTests(label, render, unmount) {
         );
       });
     });
+
     describe('asynchronous tests', () => {
       it('works with timeouts', async () => {
         function App() {
@@ -470,7 +575,7 @@ function runActTests(label, render, unmount) {
                 expect(interactions.size).toBe(1);
                 expectedInteraction = Array.from(interactions)[0];
 
-                render(<Component />, container);
+                rerender(<Component />);
               },
             );
           });
@@ -500,7 +605,7 @@ function runActTests(label, render, unmount) {
                 expect(interactions.size).toBe(1);
                 expectedInteraction = Array.from(interactions)[0];
 
-                render(<Component />, secondContainer);
+                rerender(<Component />);
               });
             },
           );
@@ -510,6 +615,7 @@ function runActTests(label, render, unmount) {
         });
       }
     });
+
     describe('error propagation', () => {
       it('propagates errors - sync', () => {
         let err;
@@ -614,6 +720,98 @@ function runActTests(label, render, unmount) {
           });
           expect(Scheduler).toHaveYielded(['oh yes']);
         }
+      });
+    });
+
+    describe('suspense', () => {
+      if (__DEV__) {
+        it('triggers fallbacks if available', async () => {
+          let resolved = false;
+          let resolve;
+          const promise = new Promise(_resolve => {
+            resolve = _resolve;
+          });
+
+          function Suspends() {
+            if (resolved) {
+              return 'was suspended';
+            }
+            throw promise;
+          }
+
+          function App(props) {
+            return (
+              <React.Suspense
+                fallback={<span data-test-id="spinner">loading...</span>}>
+                {props.suspend ? <Suspends /> : 'content'}
+              </React.Suspense>
+            );
+          }
+
+          // render something so there's content
+          act(() => {
+            render(<App suspend={false} />, container);
+          });
+
+          // trigger a suspendy update
+          act(() => {
+            rerender(<App suspend={true} />);
+          });
+          expect(
+            document.querySelector('[data-test-id=spinner]'),
+          ).not.toBeNull();
+
+          // now render regular content again
+          act(() => {
+            rerender(<App suspend={false} />);
+          });
+          expect(document.querySelector('[data-test-id=spinner]')).toBeNull();
+
+          // trigger a suspendy update with a delay
+          React.unstable_withSuspenseConfig(
+            () => {
+              act(() => {
+                rerender(<App suspend={true} />);
+              });
+            },
+            {timeout: 5000},
+          );
+          // the spinner shows up regardless
+          expect(
+            document.querySelector('[data-test-id=spinner]'),
+          ).not.toBeNull();
+
+          // resolve the promise
+          await act(async () => {
+            resolved = true;
+            resolve();
+          });
+
+          // spinner gone, content showing
+          expect(document.querySelector('[data-test-id=spinner]')).toBeNull();
+          expect(container.textContent).toBe('was suspended');
+        });
+      }
+    });
+    describe('warn in prod mode', () => {
+      it('warns if you try to use act() in prod mode', () => {
+        const spy = spyOnDevAndProd(console, 'error');
+
+        act(() => {});
+
+        if (!__DEV__) {
+          expect(console.error).toHaveBeenCalledTimes(1);
+          expect(console.error.calls.argsFor(0)[0]).toContain(
+            'act(...) is not supported in production builds of React',
+          );
+        } else {
+          expect(console.error).toHaveBeenCalledTimes(0);
+        }
+
+        spy.calls.reset();
+        // does not warn twice
+        act(() => {});
+        expect(console.error).toHaveBeenCalledTimes(0);
       });
     });
   });

@@ -54,8 +54,8 @@ describe('ReactFabric', () => {
     expect(handle).toBe(2);
   });
 
-  it('sets native props with setNativeProps on Fabric nodes with the RN renderer', () => {
-    UIManager.updateView.mockReset();
+  it('dispatches commands on Fabric nodes with the RN renderer', () => {
+    UIManager.dispatchViewManagerCommand.mockReset();
     const View = createReactNativeComponentClass('RCTView', () => ({
       validAttributes: {title: true},
       uiViewClassName: 'RCTView',
@@ -64,13 +64,13 @@ describe('ReactFabric', () => {
     let ref = React.createRef();
 
     ReactFabric.render(<View title="bar" ref={ref} />, 11);
-    expect(UIManager.updateView).not.toBeCalled();
-    ReactNative.setNativeProps(ref.current, {title: 'baz'});
-    expect(UIManager.updateView).toHaveBeenCalledTimes(1);
-    expect(UIManager.updateView).toHaveBeenCalledWith(
+    expect(UIManager.dispatchViewManagerCommand).not.toBeCalled();
+    ReactNative.dispatchCommand(ref.current, 'myCommand', [10, 20]);
+    expect(UIManager.dispatchViewManagerCommand).toHaveBeenCalledTimes(1);
+    expect(UIManager.dispatchViewManagerCommand).toHaveBeenCalledWith(
       expect.any(Number),
-      'RCTView',
-      {title: 'baz'},
+      'myCommand',
+      [10, 20],
     );
   });
 });

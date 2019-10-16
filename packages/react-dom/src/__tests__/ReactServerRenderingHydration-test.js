@@ -362,20 +362,16 @@ describe('ReactDOMServerHydration', () => {
     const element = document.createElement('div');
     expect(() => {
       element.innerHTML = ReactDOMServer.renderToString(markup);
-    }).toLowPriorityWarnDev(
-      ['componentWillMount() is deprecated and will be removed'],
-      {withoutStack: true},
-    );
+    }).toLowPriorityWarnDev(['componentWillMount has been renamed'], {
+      withoutStack: true,
+    });
     expect(element.textContent).toBe('Hi');
 
     expect(() => {
-      expect(() => ReactDOM.hydrate(markup, element)).toWarnDev(
-        'Please update the following components to use componentDidMount instead: ComponentWithWarning',
-      );
-    }).toLowPriorityWarnDev(
-      ['componentWillMount is deprecated and will be removed'],
-      {withoutStack: true},
-    );
+      ReactDOM.hydrate(markup, element);
+    }).toLowPriorityWarnDev(['componentWillMount has been renamed'], {
+      withoutStack: true,
+    });
     expect(element.textContent).toBe('Hi');
   });
 
@@ -502,5 +498,33 @@ describe('ReactDOMServerHydration', () => {
     await Promise.resolve();
     Scheduler.unstable_flushAll();
     expect(element.textContent).toBe('Hello world');
+  });
+
+  if (__EXPERIMENTAL__) {
+    it('does not re-enter hydration after committing the first one', () => {
+      let finalHTML = ReactDOMServer.renderToString(<div />);
+      let container = document.createElement('div');
+      container.innerHTML = finalHTML;
+      let root = ReactDOM.createRoot(container, {hydrate: true});
+      root.render(<div />);
+      Scheduler.unstable_flushAll();
+      root.render(null);
+      Scheduler.unstable_flushAll();
+      // This should not reenter hydration state and therefore not trigger hydration
+      // warnings.
+      root.render(<div />);
+      Scheduler.unstable_flushAll();
+    });
+  }
+
+  it('regression test: Suspense + hydration in legacy mode ', () => {
+    const element = document.createElement('div');
+    element.innerHTML = '<div>Hello World</div>';
+    ReactDOM.hydrate(
+      <React.Suspense>
+        <div>Hello World</div>
+      </React.Suspense>,
+      element,
+    );
   });
 });

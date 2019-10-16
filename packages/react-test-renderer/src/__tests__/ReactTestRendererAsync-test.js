@@ -53,11 +53,11 @@ describe('ReactTestRendererAsync', () => {
     }
     function Parent(props) {
       return (
-        <React.Fragment>
+        <>
           <Child>{'A:' + props.step}</Child>
           <Child>{'B:' + props.step}</Child>
           <Child>{'C:' + props.step}</Child>
-        </React.Fragment>
+        </>
       );
     }
     const renderer = ReactTestRenderer.create(<Parent step={1} />, {
@@ -79,11 +79,11 @@ describe('ReactTestRendererAsync', () => {
     }
     function Parent(props) {
       return (
-        <React.Fragment>
+        <>
           <Child>{'A:' + props.step}</Child>
           <Child>{'B:' + props.step}</Child>
           <Child>{'C:' + props.step}</Child>
-        </React.Fragment>
+        </>
       );
     }
     const renderer = ReactTestRenderer.create(<Parent step={1} />, {
@@ -115,10 +115,10 @@ describe('ReactTestRendererAsync', () => {
       }
       render() {
         return (
-          <React.Fragment>
+          <>
             <Child>{'A:' + this.props.step}</Child>
             <Child>{'B:' + this.props.step}</Child>
-          </React.Fragment>
+          </>
         );
       }
     }
@@ -160,7 +160,7 @@ describe('ReactTestRendererAsync', () => {
 
       expect(() =>
         expect(Scheduler).toFlushAndYieldThrough(['foo', 'baz']),
-      ).toThrow('Expected value to equal:');
+      ).toThrow('// deep equality');
     });
 
     it('toFlushAndYield', () => {
@@ -181,7 +181,7 @@ describe('ReactTestRendererAsync', () => {
       );
 
       expect(() => expect(Scheduler).toFlushWithoutYielding()).toThrowError(
-        'Expected value to equal:',
+        '// deep equality',
       );
 
       renderer.update(
@@ -193,7 +193,7 @@ describe('ReactTestRendererAsync', () => {
       );
 
       expect(() => expect(Scheduler).toFlushAndYield(['foo', 'baz'])).toThrow(
-        'Expected value to equal:',
+        '// deep equality',
       );
     });
 
@@ -254,7 +254,7 @@ describe('ReactTestRendererAsync', () => {
 
     ReactTestRenderer.create(<App />);
     expect(() => expect(Scheduler).toHaveYielded(['A', 'B'])).toThrow(
-      'Expected value to equal:',
+      '// deep equality',
     );
   });
 

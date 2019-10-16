@@ -39,7 +39,7 @@ import {
   useReducer,
   useRef,
   useState,
-  useEvent,
+  useResponder,
 } from './ReactHooks';
 import {withSuspenseConfig} from './ReactBatchConfig';
 import {
@@ -51,9 +51,15 @@ import {
   jsxWithValidationDynamic,
 } from './ReactElementValidator';
 import ReactSharedInternals from './ReactSharedInternals';
-import {error, warn} from './withComponentStack';
-import createEvent from 'shared/createEventComponent';
-import {enableJSXTransformAPI, enableFlareAPI} from 'shared/ReactFeatureFlags';
+import createFundamental from 'shared/createFundamentalComponent';
+import createResponder from 'shared/createEventResponder';
+import createScope from 'shared/createScope';
+import {
+  enableJSXTransformAPI,
+  enableFlareAPI,
+  enableFundamentalAPI,
+  enableScopeAPI,
+} from 'shared/ReactFeatureFlags';
 const React = {
   Children: {
     map,
@@ -71,9 +77,6 @@ const React = {
   forwardRef,
   lazy,
   memo,
-
-  error,
-  warn,
 
   useCallback,
   useContext,
@@ -105,8 +108,16 @@ const React = {
 };
 
 if (enableFlareAPI) {
-  React.unstable_createEvent = createEvent;
-  React.unstable_useEvent = useEvent;
+  React.unstable_useResponder = useResponder;
+  React.unstable_createResponder = createResponder;
+}
+
+if (enableFundamentalAPI) {
+  React.unstable_createFundamental = createFundamental;
+}
+
+if (enableScopeAPI) {
+  React.unstable_createScope = createScope;
 }
 
 // Note: some APIs are added with feature flags.

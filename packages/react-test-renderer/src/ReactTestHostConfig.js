@@ -9,7 +9,11 @@
 
 import warning from 'shared/warning';
 
-import type {ReactEventComponentInstance} from 'shared/ReactTypes';
+import type {
+  ReactEventResponder,
+  ReactEventResponderInstance,
+  ReactFundamentalComponentInstance,
+} from 'shared/ReactTypes';
 
 import {enableFlareAPI} from 'shared/ReactFeatureFlags';
 
@@ -25,6 +29,7 @@ export type Instance = {|
   props: Object,
   isHidden: boolean,
   children: Array<Instance | TextInstance>,
+  internalInstanceHandle: Object,
   rootContainerInstance: Container,
   tag: 'INSTANCE',
 |};
@@ -48,6 +53,8 @@ export * from 'shared/HostConfigWithNoHydration';
 const EVENT_COMPONENT_CONTEXT = {};
 const NO_CONTEXT = {};
 const UPDATE_SIGNAL = {};
+const nodeToInstanceMap = new WeakMap();
+
 if (__DEV__) {
   Object.freeze(NO_CONTEXT);
   Object.freeze(UPDATE_SIGNAL);
@@ -57,10 +64,14 @@ export function getPublicInstance(inst: Instance | TextInstance): * {
   switch (inst.tag) {
     case 'INSTANCE':
       const createNodeMock = inst.rootContainerInstance.createNodeMock;
-      return createNodeMock({
+      const mockNode = createNodeMock({
         type: inst.type,
         props: inst.props,
       });
+      if (typeof mockNode === 'object' && mockNode !== null) {
+        nodeToInstanceMap.set(mockNode, inst);
+      }
+      return mockNode;
     default:
       return inst;
   }
@@ -121,15 +132,6 @@ export function getChildHostContext(
   return NO_CONTEXT;
 }
 
-export function getChildHostContextForEventComponent(
-  parentHostContext: HostContext,
-): HostContext {
-  if (__DEV__ && enableFlareAPI) {
-    return EVENT_COMPONENT_CONTEXT;
-  }
-  return NO_CONTEXT;
-}
-
 export function prepareForCommit(containerInfo: Container): void {
   // noop
 }
@@ -145,11 +147,22 @@ export function createInstance(
   hostContext: Object,
   internalInstanceHandle: Object,
 ): Instance {
+  let propsToUse = props;
+  if (enableFlareAPI) {
+    if (props.listeners != null) {
+      // We want to remove the "listeners" prop
+      // as we don't want it in the test renderer's
+      // instance props.
+      const {listeners, ...otherProps} = props; // eslint-disable-line
+      propsToUse = otherProps;
+    }
+  }
   return {
     type,
-    props,
+    props: propsToUse,
     isHidden: false,
     children: [],
+    internalInstanceHandle,
     rootContainerInstance,
     tag: 'INSTANCE',
   };
@@ -217,7 +230,7 @@ export function createTextInstance(
 }
 
 export const isPrimaryRenderer = false;
-export const shouldWarnUnactedUpdates = true;
+export const warnsIfNotActing = true;
 
 export const scheduleTimeout = setTimeout;
 export const cancelTimeout = clearTimeout;
@@ -285,20 +298,72 @@ export function unhideTextInstance(
   textInstance.isHidden = false;
 }
 
-export function mountEventComponent(
-  eventComponentInstance: ReactEventComponentInstance<any, any, any>,
+export function mountResponderInstance(
+  responder: ReactEventResponder<any, any>,
+  responderInstance: ReactEventResponderInstance<any, any>,
+  props: Object,
+  state: Object,
+  instance: Instance,
+) {
+  // noop
+}
+
+export function unmountResponderInstance(
+  responderInstance: ReactEventResponderInstance<any, any>,
 ): void {
   // noop
 }
 
-export function updateEventComponent(
-  eventComponentInstance: ReactEventComponentInstance<any, any, any>,
-): void {
-  // noop
+export function getFundamentalComponentInstance(fundamentalInstance): Instance {
+  const {impl, props, state} = fundamentalInstance;
+  return impl.getInstance(null, props, state);
 }
 
-export function unmountEventComponent(
-  eventComponentInstance: ReactEventComponentInstance<any, any, any>,
+export function mountFundamentalComponent(
+  fundamentalInstance: ReactFundamentalComponentInstance<any, any>,
 ): void {
-  // noop
+  const {impl, instance, props, state} = fundamentalInstance;
+  const onMount = impl.onMount;
+  if (onMount !== undefined) {
+    onMount(null, instance, props, state);
+  }
+}
+
+export function shouldUpdateFundamentalComponent(
+  fundamentalInstance: ReactFundamentalComponentInstance<any, any>,
+): boolean {
+  const {impl, prevProps, props, state} = fundamentalInstance;
+  const shouldUpdate = impl.shouldUpdate;
+  if (shouldUpdate !== undefined) {
+    return shouldUpdate(null, prevProps, props, state);
+  }
+  return true;
+}
+
+export function updateFundamentalComponent(
+  fundamentalInstance: ReactFundamentalComponentInstance<any, any>,
+): void {
+  const {impl, instance, prevProps, props, state} = fundamentalInstance;
+  const onUpdate = impl.onUpdate;
+  if (onUpdate !== undefined) {
+    onUpdate(null, instance, prevProps, props, state);
+  }
+}
+
+export function unmountFundamentalComponent(
+  fundamentalInstance: ReactFundamentalComponentInstance<any, any>,
+): void {
+  const {impl, instance, props, state} = fundamentalInstance;
+  const onUnmount = impl.onUnmount;
+  if (onUnmount !== undefined) {
+    onUnmount(null, instance, props, state);
+  }
+}
+
+export function getInstanceFromNode(mockNode: Object) {
+  const instance = nodeToInstanceMap.get(mockNode);
+  if (instance !== undefined) {
+    return instance.internalInstanceHandle;
+  }
+  return null;
 }

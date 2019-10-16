@@ -1292,78 +1292,84 @@ describe('ReactUpdates', () => {
     expect(ops).toEqual(['Foo', 'Bar', 'Baz']);
   });
 
-  it('delays sync updates inside hidden subtrees in Concurrent Mode', () => {
-    const container = document.createElement('div');
+  if (__EXPERIMENTAL__) {
+    it('delays sync updates inside hidden subtrees in Concurrent Mode', () => {
+      const container = document.createElement('div');
 
-    function Baz() {
-      Scheduler.unstable_yieldValue('Baz');
-      return <p>baz</p>;
-    }
-
-    let setCounter;
-    function Bar() {
-      const [counter, _setCounter] = React.useState(0);
-      setCounter = _setCounter;
-      Scheduler.unstable_yieldValue('Bar');
-      return <p>bar {counter}</p>;
-    }
-
-    function Foo() {
-      Scheduler.unstable_yieldValue('Foo');
-      React.useEffect(() => {
-        Scheduler.unstable_yieldValue('Foo#effect');
-      });
-      return (
-        <div>
-          <div hidden={true}>
-            <Bar />
-          </div>
-          <Baz />
-        </div>
-      );
-    }
-
-    const root = ReactDOM.unstable_createRoot(container);
-    let hiddenDiv;
-    act(() => {
-      root.render(<Foo />);
-      if (__DEV__) {
-        expect(Scheduler).toFlushAndYieldThrough([
-          'Foo',
-          'Foo',
-          'Baz',
-          'Foo#effect',
-        ]);
-      } else {
-        expect(Scheduler).toFlushAndYieldThrough(['Foo', 'Baz', 'Foo#effect']);
+      function Baz() {
+        Scheduler.unstable_yieldValue('Baz');
+        return <p>baz</p>;
       }
-      hiddenDiv = container.firstChild.firstChild;
-      expect(hiddenDiv.hidden).toBe(true);
-      expect(hiddenDiv.innerHTML).toBe('');
+
+      let setCounter;
+      function Bar() {
+        const [counter, _setCounter] = React.useState(0);
+        setCounter = _setCounter;
+        Scheduler.unstable_yieldValue('Bar');
+        return <p>bar {counter}</p>;
+      }
+
+      function Foo() {
+        Scheduler.unstable_yieldValue('Foo');
+        React.useEffect(() => {
+          Scheduler.unstable_yieldValue('Foo#effect');
+        });
+        return (
+          <div>
+            <div hidden={true}>
+              <Bar />
+            </div>
+            <Baz />
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(container);
+      let hiddenDiv;
+      act(() => {
+        root.render(<Foo />);
+        if (__DEV__) {
+          expect(Scheduler).toFlushAndYieldThrough([
+            'Foo',
+            'Foo',
+            'Baz',
+            'Foo#effect',
+          ]);
+        } else {
+          expect(Scheduler).toFlushAndYieldThrough([
+            'Foo',
+            'Baz',
+            'Foo#effect',
+          ]);
+        }
+        hiddenDiv = container.firstChild.firstChild;
+        expect(hiddenDiv.hidden).toBe(true);
+        expect(hiddenDiv.innerHTML).toBe('');
+        // Run offscreen update
+        if (__DEV__) {
+          expect(Scheduler).toFlushAndYield(['Bar', 'Bar']);
+        } else {
+          expect(Scheduler).toFlushAndYield(['Bar']);
+        }
+        expect(hiddenDiv.hidden).toBe(true);
+        expect(hiddenDiv.innerHTML).toBe('<p>bar 0</p>');
+      });
+
+      ReactDOM.flushSync(() => {
+        setCounter(1);
+      });
+      // Should not flush yet
+      expect(hiddenDiv.innerHTML).toBe('<p>bar 0</p>');
+
       // Run offscreen update
       if (__DEV__) {
         expect(Scheduler).toFlushAndYield(['Bar', 'Bar']);
       } else {
         expect(Scheduler).toFlushAndYield(['Bar']);
       }
-      expect(hiddenDiv.hidden).toBe(true);
-      expect(hiddenDiv.innerHTML).toBe('<p>bar 0</p>');
+      expect(hiddenDiv.innerHTML).toBe('<p>bar 1</p>');
     });
-
-    ReactDOM.flushSync(() => {
-      setCounter(1);
-    });
-    // Should not flush yet
-    expect(hiddenDiv.innerHTML).toBe('<p>bar 0</p>');
-
-    // Run offscreen update
-    if (__DEV__) {
-      expect(Scheduler).toFlushAndYield(['Bar', 'Bar']);
-    } else {
-      expect(Scheduler).toFlushAndYield(['Bar']);
-    }
-    expect(hiddenDiv.innerHTML).toBe('<p>bar 1</p>');
-  });
+  }
 
   it('can render ridiculously large number of roots without triggering infinite update loop error', () => {
     class Foo extends React.Component {
@@ -1631,6 +1637,7 @@ describe('ReactUpdates', () => {
             ReactDOM.render(<App />, container);
             while (error === null) {
               Scheduler.unstable_flushNumberOfYields(1);
+              Scheduler.unstable_clearYields();
             }
             expect(error).toContain('Warning: Maximum update depth exceeded.');
             expect(stack).toContain('in NonTerminating');
@@ -1653,9 +1660,9 @@ describe('ReactUpdates', () => {
         React.useEffect(() => {
           if (step < LIMIT) {
             setStep(x => x + 1);
-            Scheduler.unstable_yieldValue(step);
           }
         });
+        Scheduler.unstable_yieldValue(step);
         return step;
       }
 
@@ -1663,24 +1670,11 @@ describe('ReactUpdates', () => {
       act(() => {
         ReactDOM.render(<Terminating />, container);
       });
-
-      // Verify we can flush them asynchronously without warning
-      for (let i = 0; i < LIMIT * 2; i++) {
-        Scheduler.unstable_flushNumberOfYields(1);
-      }
       expect(container.textContent).toBe('50');
-
-      // Verify restarting from 0 doesn't cross the limit
       act(() => {
         _setStep(0);
-        // flush once to update the dom
-        Scheduler.unstable_flushNumberOfYields(1);
-        expect(container.textContent).toBe('0');
-        for (let i = 0; i < LIMIT * 2; i++) {
-          Scheduler.unstable_flushNumberOfYields(1);
-        }
-        expect(container.textContent).toBe('50');
       });
+      expect(container.textContent).toBe('50');
     });
 
     it('can have many updates inside useEffect without triggering a warning', () => {
