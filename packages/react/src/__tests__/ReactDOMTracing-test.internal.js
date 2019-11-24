@@ -25,7 +25,6 @@ let onWorkStopped;
 
 function loadModules() {
   ReactFeatureFlags = require('shared/ReactFeatureFlags');
-  ReactFeatureFlags.debugRenderPhaseSideEffects = false;
   ReactFeatureFlags.debugRenderPhaseSideEffectsForStrictMode = false;
   ReactFeatureFlags.enableProfilerTimer = true;
   ReactFeatureFlags.enableSchedulerTracing = true;
@@ -523,7 +522,7 @@ describe('ReactDOMTracing', () => {
       });
 
       it('should properly trace interactions through a multi-pass SuspenseList render', () => {
-        const SuspenseList = React.unstable_SuspenseList;
+        const SuspenseList = React.SuspenseList;
         const Suspense = React.Suspense;
         function Text({text}) {
           Scheduler.unstable_yieldValue(text);

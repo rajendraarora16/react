@@ -56,7 +56,6 @@ import {
 } from 'shared/ReactSideEffectTags';
 import ReactSharedInternals from 'shared/ReactSharedInternals';
 import {
-  debugRenderPhaseSideEffects,
   debugRenderPhaseSideEffectsForStrictMode,
   disableLegacyContext,
   enableProfilerTimer,
@@ -103,7 +102,7 @@ import {
   NoMode,
   ProfileMode,
   StrictMode,
-  BatchedMode,
+  BlockingMode,
 } from './ReactTypeOfMode';
 import {
   shouldSetTextContent,
@@ -173,7 +172,7 @@ import {
 } from './ReactFiber';
 import {
   markSpawnedWork,
-  requestCurrentTime,
+  requestCurrentTimeForUpdate,
   retryDehydratedSuspenseBoundary,
   scheduleWork,
   renderDidSuspendDelayIfPossible,
@@ -319,9 +318,8 @@ function updateForwardRef(
       renderExpirationTime,
     );
     if (
-      debugRenderPhaseSideEffects ||
-      (debugRenderPhaseSideEffectsForStrictMode &&
-        workInProgress.mode & StrictMode)
+      debugRenderPhaseSideEffectsForStrictMode &&
+      workInProgress.mode & StrictMode
     ) {
       // Only double-render components with Hooks
       if (workInProgress.memoizedState !== null) {
@@ -642,9 +640,8 @@ function updateFunctionComponent(
       renderExpirationTime,
     );
     if (
-      debugRenderPhaseSideEffects ||
-      (debugRenderPhaseSideEffectsForStrictMode &&
-        workInProgress.mode & StrictMode)
+      debugRenderPhaseSideEffectsForStrictMode &&
+      workInProgress.mode & StrictMode
     ) {
       // Only double-render components with Hooks
       if (workInProgress.memoizedState !== null) {
@@ -843,9 +840,8 @@ function finishClassComponent(
       setCurrentPhase('render');
       nextChildren = instance.render();
       if (
-        debugRenderPhaseSideEffects ||
-        (debugRenderPhaseSideEffectsForStrictMode &&
-          workInProgress.mode & StrictMode)
+        debugRenderPhaseSideEffectsForStrictMode &&
+        workInProgress.mode & StrictMode
       ) {
         instance.render();
       }
@@ -1376,9 +1372,8 @@ function mountIndeterminateComponent(
       }
 
       if (
-        debugRenderPhaseSideEffects ||
-        (debugRenderPhaseSideEffectsForStrictMode &&
-          workInProgress.mode & StrictMode)
+        debugRenderPhaseSideEffectsForStrictMode &&
+        workInProgress.mode & StrictMode
       ) {
         // Only double-render components with Hooks
         if (workInProgress.memoizedState !== null) {
@@ -1592,12 +1587,12 @@ function updateSuspenseComponent(
   // children. It's essentially a very basic form of re-parenting.
 
   if (current === null) {
-    if (enableSuspenseServerRenderer) {
-      // If we're currently hydrating, try to hydrate this boundary.
-      // But only if this has a fallback.
-      if (nextProps.fallback !== undefined) {
-        tryToClaimNextHydratableInstance(workInProgress);
-        // This could've been a dehydrated suspense component.
+    // If we're currently hydrating, try to hydrate this boundary.
+    // But only if this has a fallback.
+    if (nextProps.fallback !== undefined) {
+      tryToClaimNextHydratableInstance(workInProgress);
+      // This could've been a dehydrated suspense component.
+      if (enableSuspenseServerRenderer) {
         const suspenseState: null | SuspenseState =
           workInProgress.memoizedState;
         if (suspenseState !== null) {
@@ -1626,8 +1621,8 @@ function updateSuspenseComponent(
       );
       primaryChildFragment.return = workInProgress;
 
-      if ((workInProgress.mode & BatchedMode) === NoMode) {
-        // Outside of batched mode, we commit the effects from the
+      if ((workInProgress.mode & BlockingMode) === NoMode) {
+        // Outside of blocking mode, we commit the effects from the
         // partially completed, timed-out tree, too.
         const progressedState: SuspenseState = workInProgress.memoizedState;
         const progressedPrimaryChild: Fiber | null =
@@ -1712,8 +1707,8 @@ function updateSuspenseComponent(
             // that we're not going to hydrate.
             primaryChildFragment.child = null;
 
-            if ((workInProgress.mode & BatchedMode) === NoMode) {
-              // Outside of batched mode, we commit the effects from the
+            if ((workInProgress.mode & BlockingMode) === NoMode) {
+              // Outside of blocking mode, we commit the effects from the
               // partially completed, timed-out tree, too.
               let progressedChild = (primaryChildFragment.child =
                 workInProgress.child);
@@ -1781,8 +1776,8 @@ function updateSuspenseComponent(
         );
         primaryChildFragment.return = workInProgress;
 
-        if ((workInProgress.mode & BatchedMode) === NoMode) {
-          // Outside of batched mode, we commit the effects from the
+        if ((workInProgress.mode & BlockingMode) === NoMode) {
+          // Outside of blocking mode, we commit the effects from the
           // partially completed, timed-out tree, too.
           const progressedState: SuspenseState = workInProgress.memoizedState;
           const progressedPrimaryChild: Fiber | null =
@@ -1876,8 +1871,8 @@ function updateSuspenseComponent(
         // schedule a placement.
         // primaryChildFragment.effectTag |= Placement;
 
-        if ((workInProgress.mode & BatchedMode) === NoMode) {
-          // Outside of batched mode, we commit the effects from the
+        if ((workInProgress.mode & BlockingMode) === NoMode) {
+          // Outside of blocking mode, we commit the effects from the
           // partially completed, timed-out tree, too.
           const progressedState: SuspenseState = workInProgress.memoizedState;
           const progressedPrimaryChild: Fiber | null =
@@ -1966,13 +1961,13 @@ function mountDehydratedSuspenseComponent(
 ): null | Fiber {
   // During the first pass, we'll bail out and not drill into the children.
   // Instead, we'll leave the content in place and try to hydrate it later.
-  if ((workInProgress.mode & BatchedMode) === NoMode) {
+  if ((workInProgress.mode & BlockingMode) === NoMode) {
     if (__DEV__) {
       warning(
         false,
         'Cannot hydrate Suspense in legacy mode. Switch from ' +
           'ReactDOM.hydrate(element, container) to ' +
-          'ReactDOM.unstable_createSyncRoot(container, { hydrate: true })' +
+          'ReactDOM.createBlockingRoot(container, { hydrate: true })' +
           '.render(element) or remove the Suspense components from ' +
           'the server rendered components.',
       );
@@ -1990,7 +1985,7 @@ function mountDehydratedSuspenseComponent(
     // a protocol to transfer that time, we'll just estimate it by using the current
     // time. This will mean that Suspense timeouts are slightly shifted to later than
     // they should be.
-    let serverDisplayTime = requestCurrentTime();
+    let serverDisplayTime = requestCurrentTimeForUpdate();
     // Schedule a normal pri update to render this content.
     let newExpirationTime = computeAsyncExpiration(serverDisplayTime);
     if (enableSchedulerTracing) {
@@ -2019,7 +2014,7 @@ function updateDehydratedSuspenseComponent(
   // but after we've already committed once.
   warnIfHydrating();
 
-  if ((workInProgress.mode & BatchedMode) === NoMode) {
+  if ((workInProgress.mode & BlockingMode) === NoMode) {
     return retrySuspenseComponentWithoutHydrating(
       current,
       workInProgress,
@@ -2355,18 +2350,20 @@ function initSuspenseListRenderState(
   tail: null | Fiber,
   lastContentRow: null | Fiber,
   tailMode: SuspenseListTailMode,
+  lastEffectBeforeRendering: null | Fiber,
 ): void {
   let renderState: null | SuspenseListRenderState =
     workInProgress.memoizedState;
   if (renderState === null) {
-    workInProgress.memoizedState = {
+    workInProgress.memoizedState = ({
       isBackwards: isBackwards,
       rendering: null,
       last: lastContentRow,
       tail: tail,
       tailExpiration: 0,
       tailMode: tailMode,
-    };
+      lastEffect: lastEffectBeforeRendering,
+    }: SuspenseListRenderState);
   } else {
     // We can reuse the existing object from previous renders.
     renderState.isBackwards = isBackwards;
@@ -2375,6 +2372,7 @@ function initSuspenseListRenderState(
     renderState.tail = tail;
     renderState.tailExpiration = 0;
     renderState.tailMode = tailMode;
+    renderState.lastEffect = lastEffectBeforeRendering;
   }
 }
 
@@ -2430,8 +2428,8 @@ function updateSuspenseListComponent(
   }
   pushSuspenseContext(workInProgress, suspenseContext);
 
-  if ((workInProgress.mode & BatchedMode) === NoMode) {
-    // Outside of batched mode, SuspenseList doesn't work so we just
+  if ((workInProgress.mode & BlockingMode) === NoMode) {
+    // Outside of blocking mode, SuspenseList doesn't work so we just
     // use make it a noop by treating it as the default revealOrder.
     workInProgress.memoizedState = null;
   } else {
@@ -2456,6 +2454,7 @@ function updateSuspenseListComponent(
           tail,
           lastContentRow,
           tailMode,
+          workInProgress.lastEffect,
         );
         break;
       }
@@ -2487,6 +2486,7 @@ function updateSuspenseListComponent(
           tail,
           null, // last
           tailMode,
+          workInProgress.lastEffect,
         );
         break;
       }
@@ -2497,6 +2497,7 @@ function updateSuspenseListComponent(
           null, // tail
           null, // last
           undefined,
+          workInProgress.lastEffect,
         );
         break;
       }
@@ -2887,7 +2888,12 @@ function beginWork(
         }
         case Profiler:
           if (enableProfilerTimer) {
-            workInProgress.effectTag |= Update;
+            // Profiler should only call onRender when one of its descendants actually rendered.
+            const hasChildWork =
+              workInProgress.childExpirationTime >= renderExpirationTime;
+            if (hasChildWork) {
+              workInProgress.effectTag |= Update;
+            }
           }
           break;
         case SuspenseComponent: {

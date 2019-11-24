@@ -12,9 +12,9 @@ import invariant from 'shared/invariant';
 import typeof * as FeatureFlagsType from 'shared/ReactFeatureFlags';
 import typeof * as FeatureFlagsShimType from './ReactFeatureFlags.native-fb';
 
-// Re-export dynamic flags from the fbsource version.
+// Uncomment to re-export dynamic flags from the fbsource version.
 export const {
-  debugRenderPhaseSideEffects,
+  enableNativeTargetAsInstance,
 } = require('../shims/ReactFeatureFlags');
 
 // The rest of the flags are static for better dead code elimination.

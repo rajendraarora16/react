@@ -9,13 +9,8 @@
 
 export const enableUserTimingAPI = __DEV__;
 
-// Helps identify side effects in begin-phase lifecycle hooks and setState reducers:
-export const debugRenderPhaseSideEffects = false;
-
-// In some cases, StrictMode should also double-render lifecycles.
-// This can be confusing for tests though,
-// And it can be bad for performance in production.
-// This feature flag can be used to control the behavior:
+// Helps identify side effects in render-phase lifecycle hooks and setState
+// reducers by double invoking them in Strict Mode.
 export const debugRenderPhaseSideEffectsForStrictMode = __DEV__;
 
 // To preserve the "Pause on caught exceptions" behavior of the debugger, we
@@ -69,7 +64,7 @@ export const enableScopeAPI = false;
 export const enableJSXTransformAPI = false;
 
 // We will enforce mocking scheduler with scheduler/unstable_mock at some point. (v17?)
-// Till then, we warn about the missing mock, but still fallback to a sync mode compatible version
+// Till then, we warn about the missing mock, but still fallback to a legacy mode compatible version
 export const warnAboutUnmockedScheduler = false;
 
 // For tests, we flush suspense fallbacks in an act scope;
@@ -94,3 +89,6 @@ export const disableLegacyContext = false;
 export const disableSchedulerTimeoutBasedOnReactExpirationTime = false;
 
 export const enableTrustedTypesIntegration = false;
+
+// Flag to turn event.target and event.currentTarget in ReactNative from a reactTag to a component instance
+export const enableNativeTargetAsInstance = false;

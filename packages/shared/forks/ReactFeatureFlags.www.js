@@ -12,7 +12,6 @@ import typeof * as FeatureFlagsShimType from './ReactFeatureFlags.www';
 
 // Re-export dynamic flags from the www version.
 export const {
-  debugRenderPhaseSideEffects,
   debugRenderPhaseSideEffectsForStrictMode,
   disableInputAttributeSyncing,
   enableTrustedTypesIntegration,
@@ -85,6 +84,8 @@ export const warnAboutUnmockedScheduler = true;
 export const enableSuspenseCallback = true;
 
 export const flushSuspenseFallbacksInTests = true;
+
+export const enableNativeTargetAsInstance = false;
 
 // Flow magic to verify the exports of this file match the original version.
 // eslint-disable-next-line no-unused-vars

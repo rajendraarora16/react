@@ -85,7 +85,7 @@ describe('ReactDOMServerPartialHydration', () => {
     ReactDOMServer = require('react-dom/server');
     Scheduler = require('scheduler');
     Suspense = React.Suspense;
-    SuspenseList = React.unstable_SuspenseList;
+    SuspenseList = React.SuspenseList;
 
     useHover = require('react-interactions/events/hover').useHover;
   });
@@ -344,7 +344,7 @@ describe('ReactDOMServerPartialHydration', () => {
     }).toWarnDev(
       'Warning: Cannot hydrate Suspense in legacy mode. Switch from ' +
         'ReactDOM.hydrate(element, container) to ' +
-        'ReactDOM.unstable_createSyncRoot(container, { hydrate: true })' +
+        'ReactDOM.createBlockingRoot(container, { hydrate: true })' +
         '.render(element) or remove the Suspense components from the server ' +
         'rendered components.' +
         '\n    in Suspense (at **)' +
@@ -1892,7 +1892,7 @@ describe('ReactDOMServerPartialHydration', () => {
 
     function Button() {
       let listener = React.unstable_useResponder(TestResponder, {});
-      return <a listeners={listener}>Click me</a>;
+      return <a DEPRECATED_flareListeners={listener}>Click me</a>;
     }
 
     function App() {
@@ -2041,7 +2041,7 @@ describe('ReactDOMServerPartialHydration', () => {
 
     function Button() {
       let listener = React.unstable_useResponder(TestResponder, {});
-      return <a listeners={listener}>Click me</a>;
+      return <a DEPRECATED_flareListeners={listener}>Click me</a>;
     }
 
     function Child() {
@@ -2408,13 +2408,13 @@ describe('ReactDOMServerPartialHydration', () => {
       return (
         <div>
           <Suspense fallback="Loading First...">
-            <span listeners={listener1} />
+            <span DEPRECATED_flareListeners={listener1} />
             {/* We suspend after to test what happens when we eager
                 attach the listener. */}
             <First />
           </Suspense>
           <Suspense fallback="Loading Second...">
-            <span listeners={listener2}>
+            <span DEPRECATED_flareListeners={listener2}>
               <Second />
             </span>
           </Suspense>
@@ -2526,7 +2526,7 @@ describe('ReactDOMServerPartialHydration', () => {
     container.innerHTML = finalHTML;
 
     suspend = true;
-    let root = ReactDOM.unstable_createRoot(container, {hydrate: true});
+    let root = ReactDOM.createRoot(container, {hydrate: true});
     root.render(<App showSibling={false} />);
     expect(Scheduler).toFlushAndYield([]);
 

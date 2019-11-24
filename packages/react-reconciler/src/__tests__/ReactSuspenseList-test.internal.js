@@ -6,6 +6,11 @@ let Suspense;
 let SuspenseList;
 
 describe('ReactSuspenseList', () => {
+  if (!__EXPERIMENTAL__) {
+    it("empty test so Jest doesn't complain", () => {});
+    return;
+  }
+
   beforeEach(() => {
     jest.resetModules();
     ReactFeatureFlags = require('shared/ReactFeatureFlags');
@@ -16,7 +21,7 @@ describe('ReactSuspenseList', () => {
     ReactNoop = require('react-noop-renderer');
     Scheduler = require('scheduler');
     Suspense = React.Suspense;
-    SuspenseList = React.unstable_SuspenseList;
+    SuspenseList = React.SuspenseList;
   });
 
   function Text(props) {
@@ -581,6 +586,90 @@ describe('ReactSuspenseList', () => {
         <span>A</span>
         <span>B</span>
         <span>C</span>
+      </>,
+    );
+  });
+
+  it('displays all "together" during an update', async () => {
+    let A = createAsyncText('A');
+    let B = createAsyncText('B');
+    let C = createAsyncText('C');
+    let D = createAsyncText('D');
+
+    function Foo({step}) {
+      return (
+        <SuspenseList revealOrder="together">
+          {step === 0 && (
+            <Suspense fallback={<Text text="Loading A" />}>
+              <A />
+            </Suspense>
+          )}
+          {step === 0 && (
+            <Suspense fallback={<Text text="Loading B" />}>
+              <B />
+            </Suspense>
+          )}
+          {step === 1 && (
+            <Suspense fallback={<Text text="Loading C" />}>
+              <C />
+            </Suspense>
+          )}
+          {step === 1 && (
+            <Suspense fallback={<Text text="Loading D" />}>
+              <D />
+            </Suspense>
+          )}
+        </SuspenseList>
+      );
+    }
+
+    // Mount
+    await A.resolve();
+    ReactNoop.render(<Foo step={0} />);
+    expect(Scheduler).toFlushAndYield([
+      'A',
+      'Suspend! [B]',
+      'Loading B',
+      'Loading A',
+      'Loading B',
+    ]);
+    expect(ReactNoop).toMatchRenderedOutput(
+      <>
+        <span>Loading A</span>
+        <span>Loading B</span>
+      </>,
+    );
+    await B.resolve();
+    expect(Scheduler).toFlushAndYield(['A', 'B']);
+    expect(ReactNoop).toMatchRenderedOutput(
+      <>
+        <span>A</span>
+        <span>B</span>
+      </>,
+    );
+
+    // Update
+    await C.resolve();
+    ReactNoop.render(<Foo step={1} />);
+    expect(Scheduler).toFlushAndYield([
+      'C',
+      'Suspend! [D]',
+      'Loading D',
+      'Loading C',
+      'Loading D',
+    ]);
+    expect(ReactNoop).toMatchRenderedOutput(
+      <>
+        <span>Loading C</span>
+        <span>Loading D</span>
+      </>,
+    );
+    await D.resolve();
+    expect(Scheduler).toFlushAndYield(['C', 'D']);
+    expect(ReactNoop).toMatchRenderedOutput(
+      <>
+        <span>C</span>
+        <span>D</span>
       </>,
     );
   });
@@ -1934,7 +2023,7 @@ describe('ReactSuspenseList', () => {
     );
   });
 
-  it('eventually resolves two nested forwards suspense list with a hidden tail', async () => {
+  it('eventually resolves two nested forwards suspense lists with a hidden tail', async () => {
     let B = createAsyncText('B');
 
     function Foo({showB}) {
@@ -2045,5 +2134,93 @@ describe('ReactSuspenseList', () => {
         <span>C</span>
       </div>,
     );
+  });
+
+  it('is able to re-suspend the last rows during an update with hidden', async () => {
+    let AsyncB = createAsyncText('B');
+
+    let setAsyncB;
+
+    function B() {
+      let [shouldBeAsync, setAsync] = React.useState(false);
+      setAsyncB = setAsync;
+
+      return shouldBeAsync ? (
+        <Suspense fallback={<Text text="Loading B" />}>
+          <AsyncB />
+        </Suspense>
+      ) : (
+        <Text text="Sync B" />
+      );
+    }
+
+    function Foo({updateList}) {
+      return (
+        <SuspenseList revealOrder="forwards" tail="hidden">
+          <Suspense key="A" fallback={<Text text="Loading A" />}>
+            <Text text="A" />
+          </Suspense>
+          <B key="B" updateList={updateList} />
+        </SuspenseList>
+      );
+    }
+
+    ReactNoop.render(<Foo />);
+
+    expect(Scheduler).toFlushAndYield(['A', 'Sync B']);
+
+    expect(ReactNoop).toMatchRenderedOutput(
+      <>
+        <span>A</span>
+        <span>Sync B</span>
+      </>,
+    );
+
+    let previousInst = setAsyncB;
+
+    // During an update we suspend on B.
+    ReactNoop.act(() => setAsyncB(true));
+
+    expect(Scheduler).toHaveYielded([
+      'Suspend! [B]',
+      'Loading B',
+      // The second pass is the "force hide" pass
+      'Loading B',
+    ]);
+
+    expect(ReactNoop).toMatchRenderedOutput(
+      <>
+        <span>A</span>
+        <span>Loading B</span>
+      </>,
+    );
+
+    // Before we resolve we'll rerender the whole list.
+    // This should leave the tree intact.
+    ReactNoop.act(() => ReactNoop.render(<Foo updateList={true} />));
+
+    expect(Scheduler).toHaveYielded(['A', 'Suspend! [B]', 'Loading B']);
+
+    expect(ReactNoop).toMatchRenderedOutput(
+      <>
+        <span>A</span>
+        <span>Loading B</span>
+      </>,
+    );
+
+    await AsyncB.resolve();
+
+    expect(Scheduler).toFlushAndYield(['B']);
+
+    expect(ReactNoop).toMatchRenderedOutput(
+      <>
+        <span>A</span>
+        <span>B</span>
+      </>,
+    );
+
+    // This should be the same instance. I.e. it didn't
+    // remount.
+    expect(previousInst).toBe(setAsyncB);
   });
 });
